@@ -1,0 +1,10 @@
+:root { --pad: 12px; }
+body { font-family: system-ui, sans-serif; margin: 0; display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+header, footer { padding: var(--pad); border-bottom: 1px solid #444; }
+footer { border-top: 1px solid #444; border-bottom: none; display: grid; grid-template-columns: 1fr auto; gap: var(--pad); }
+#log { padding: var(--pad); overflow: auto; display: grid; gap: 8px; }
+.msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; }
+.user { background: rgba(100,150,255,.15); border: 1px solid rgba(100,150,255,.3); }
+.bot { background: rgba(150,255,150,.12); border: 1px solid rgba(150,255,150,.25); }
+button { cursor: pointer; }
+textarea { width: 100%; resize: vertical; }
