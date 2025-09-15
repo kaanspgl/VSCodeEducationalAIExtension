@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { callBackend } from '../shared/callBackend';
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -32,24 +33,25 @@ export class ChatPanel {
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, selection: string) {
     this._panel = panel;
     this._extensionUri = extensionUri;
+
     this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
 
+    // Listen for messages from the webview
     this._panel.webview.onDidReceiveMessage(async (msg) => {
-      switch (msg?.type) {
-        case 'ask': {
-          const reply = await this._callAI(msg.payload ?? '');
-          this._panel.webview.postMessage({ type: 'answer', payload: reply ?? 'Request failed.' });
-          break;
-        }
-        case 'requestActiveContext': {
-          const ctx = this._collectEditorContext();
-          this._panel.webview.postMessage({ type: 'activeContext', payload: ctx });
-          break;
-        }
+      const type = msg?.type;
+      if (type === 'ask') {
+        const text = String(msg?.payload ?? '');
+        const res = await callBackend(text);
+        const payload = res.ok ? (res.content || '') : `Error: ${res.message}`;
+        this._panel.webview.postMessage({ type: 'answer', payload });
+      } else if (type === 'requestActiveContext') {
+        const ctx = this._collectEditorContext();
+        this._panel.webview.postMessage({ type: 'activeContext', payload: ctx });
       }
     }, null, this._disposables);
 
     this._postSelection(selection);
+
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
   }
 
@@ -72,68 +74,12 @@ export class ChatPanel {
     if (!editor) return { language: '', selection: '', filename: '' };
     const doc = editor.document;
     const sel = editor.selection.isEmpty ? '' : doc.getText(editor.selection);
-    return { language: doc.languageId, selection: sel, filename: doc.fileName };
+    return {
+      language: doc.languageId,
+      selection: sel,
+      filename: doc.fileName
+    };
   }
-
-  private async _callAI(prompt: string): Promise<string | null> {
-  const cfg = vscode.workspace.getConfiguration('eduai');
-  const provider = (cfg.get<string>('provider') || 'openai').toLowerCase();
-  const endpoint = cfg.get<string>('endpoint') || '';
-  const apiKey = cfg.get<string>('apiKey') || '';
-  const model = cfg.get<string>('model') || 'llama3.1';
-
-  if (provider === 'ollama') {
-    const base = endpoint || 'http://localhost:11434/api/chat';
-    try {
-      const res = await (globalThis as any).fetch(base, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          stream: false
-        })
-      } as any);
-      if (!res?.ok) {
-        const text = await res.text?.();
-        throw new Error(`HTTP ${res?.status}: ${text}`);
-      }
-      const data: any = await res.json();
-      return data?.message?.content ?? JSON.stringify(data);
-    } catch (err: any) {
-      return `EduAI (Ollama) request failed: ${err.message}`;
-    }
-  }
-
-  if (!endpoint || !apiKey) return 'Configure eduai.endpoint and eduai.apiKey in Settings.';
-
-  try {
-    const res = await (globalThis as any).fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a helpful coding assistant inside VS Code.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.2
-      })
-    } as any);
-    if (!res?.ok) {
-      const text = await res.text?.();
-      throw new Error(`HTTP ${res?.status}: ${text}`);
-    }
-    const data: any = await res.json();
-    return data?.choices?.[0]?.message?.content ?? JSON.stringify(data);
-  } catch (err: any) {
-    return `EduAI (OpenAI) request failed: ${err.message}`;
-  }
-}
-
 
   private _getHtmlForWebview(webview: vscode.Webview) {
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js'));

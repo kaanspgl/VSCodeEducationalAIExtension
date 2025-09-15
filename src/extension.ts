@@ -1,121 +1,62 @@
 import * as vscode from 'vscode';
-import { ChatPanel } from './panels/ChatPanel';
+import { callBackend } from './shared/callBackend';
 
 export function activate(context: vscode.ExtensionContext) {
-  // Command: Open chat webview
-  context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.openChat', async () => {
-      const includeSelection = vscode.workspace
-        .getConfiguration('eduai')
-        .get<boolean>('includeSelectionByDefault');
+  // Command: Open chat panel (implemented inside ChatPanel)
+  const openChat = vscode.commands.registerCommand('eduai.openChat', async () => {
+    // Lazy-import to keep activation light
+    const { ChatPanel } = await import('./panels/ChatPanel');
+    const includeSelection = vscode.workspace.getConfiguration('eduai').get<boolean>('includeSelectionByDefault');
+    let selectionText = '';
+    const editor = vscode.window.activeTextEditor;
+    if (includeSelection && editor && !editor.selection.isEmpty) {
+      selectionText = editor.document.getText(editor.selection);
+    }
+    ChatPanel.render(context.extensionUri, selectionText);
+  });
 
-      let selectionText = '';
-      const editor = vscode.window.activeTextEditor;
-      if (includeSelection && editor && !editor.selection.isEmpty) {
-        selectionText = editor.document.getText(editor.selection);
-      }
-      ChatPanel.render(context.extensionUri, selectionText);
-    })
-  );
+  // Command: Explain selection → shows a Markdown doc
+  const explainSelection = vscode.commands.registerCommand('eduai.explainSelection', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      vscode.window.showInformationMessage('Select some code first.');
+      return;
+    }
 
-  // Command: Explain selection → shows Markdown explanation
-  context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.explainSelection', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.selection.isEmpty) {
-        vscode.window.showInformationMessage('Select some code first.');
-        return;
-      }
-      const code = editor.document.getText(editor.selection);
-      const explanation = await callAI(
-        'Explain the following code to a student and suggest improvements.\n\n' + code
-      );
-      if (explanation) {
-        const doc = await vscode.workspace.openTextDocument({
-          content: explanation,
-          language: 'markdown'
-        });
-        vscode.window.showTextDocument(doc, { preview: true });
-      }
-    })
-  );
+    const code = editor.document.getText(editor.selection);
+    const prompt =
+      'Explain the following code to a student and suggest improvements.\n\n' + code;
+
+    const result = await callBackend(prompt);
+    if (!result.ok) {
+      vscode.window.showErrorMessage(result.message);
+      return;
+    }
+
+    const doc = await vscode.workspace.openTextDocument({
+      content: result.content || '(no content)',
+      language: 'markdown'
+    });
+    vscode.window.showTextDocument(doc, { preview: true });
+  });
+
+  context.subscriptions.push(openChat, explainSelection);
 }
 
 export function deactivate() {}
 
-async function callAI(prompt: string): Promise<string | null> {
+/**
+ * Shared settings accessor (optional helper you can expand later)
+ */
+export function getEduAISettings() {
   const cfg = vscode.workspace.getConfiguration('eduai');
-  const provider = (cfg.get<string>('provider') || 'openai').toLowerCase();
+  // Default to OLLAMA so local testing "just works"
+  const provider = (cfg.get<string>('provider') || 'ollama').toLowerCase();
   const endpoint = cfg.get<string>('endpoint') || '';
   const apiKey = cfg.get<string>('apiKey') || '';
-  const model = cfg.get<string>('model') || 'gpt-4o-mini';
+  const model =
+    cfg.get<string>('model') ||
+    (provider === 'ollama' ? 'llama3.1' : 'gpt-4o-mini');
 
-  if (provider === 'ollama') {
-    // Default Ollama endpoint if user left it blank
-    const base = endpoint || 'http://localhost:11434/api/chat';
-    try {
-      const res = await (globalThis as any).fetch(base, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Ollama chat format (non-streaming)
-        body: JSON.stringify({
-          model: model || 'llama3.1',
-          messages: [{ role: 'user', content: prompt }],
-          stream: false
-        })
-      } as any);
-
-      if (!res?.ok) {
-        const text = await res.text?.();
-        throw new Error(`HTTP ${res?.status}: ${text}`);
-      }
-      const data: any = await res.json();
-      // Ollama returns { message: { role, content }, ... }
-      const content = data?.message?.content ?? JSON.stringify(data);
-      return content;
-    } catch (err: any) {
-      vscode.window.showErrorMessage(`EduAI (Ollama) request failed: ${err.message}`);
-      return null;
-    }
-  }
-
-  // Default: OpenAI-compatible
-  if (!endpoint) {
-    vscode.window.showErrorMessage('EduAI endpoint is not set (eduai.endpoint).');
-    return null;
-  }
-  if (!apiKey) {
-    vscode.window.showErrorMessage('EduAI API key is not set (eduai.apiKey).');
-    return null;
-  }
-
-  try {
-    const res = await (globalThis as any).fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a helpful coding assistant inside VS Code.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.2
-      })
-    } as any);
-
-    if (!res?.ok) {
-      const text = await res.text?.();
-      throw new Error(`HTTP ${res?.status}: ${text}`);
-    }
-    const data: any = await res.json();
-    const content = data?.choices?.[0]?.message?.content ?? JSON.stringify(data);
-    return content;
-  } catch (err: any) {
-    vscode.window.showErrorMessage(`EduAI (OpenAI) request failed: ${err.message}`);
-    return null;
-  }
+  return { provider, endpoint, apiKey, model };
 }
-
