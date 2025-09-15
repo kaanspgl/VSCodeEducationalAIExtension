@@ -76,43 +76,64 @@ export class ChatPanel {
   }
 
   private async _callAI(prompt: string): Promise<string | null> {
-    const cfg = vscode.workspace.getConfiguration('eduai');
-    const endpoint = cfg.get<string>('endpoint') || '';
-    const apiKey = cfg.get<string>('apiKey') || '';
-    const model = cfg.get<string>('model') || 'gpt-4o-mini';
+  const cfg = vscode.workspace.getConfiguration('eduai');
+  const provider = (cfg.get<string>('provider') || 'openai').toLowerCase();
+  const endpoint = cfg.get<string>('endpoint') || '';
+  const apiKey = cfg.get<string>('apiKey') || '';
+  const model = cfg.get<string>('model') || 'llama3.1';
 
-    if (!endpoint || !apiKey) {
-      return 'Configure eduai.endpoint and eduai.apiKey in Settings.';
-    }
-
+  if (provider === 'ollama') {
+    const base = endpoint || 'http://localhost:11434/api/chat';
     try {
-      const res = await (globalThis as any).fetch(endpoint, {
+      const res = await (globalThis as any).fetch(base, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          messages: [
-            { role: 'system', content: 'You are a helpful coding assistant inside VS Code.' },
-            { role: 'user', content: prompt }
-          ],
-          temperature: 0.2
+          messages: [{ role: 'user', content: prompt }],
+          stream: false
         })
       } as any);
-
       if (!res?.ok) {
         const text = await res.text?.();
         throw new Error(`HTTP ${res?.status}: ${text}`);
       }
-
       const data: any = await res.json();
-      return data?.choices?.[0]?.message?.content ?? JSON.stringify(data);
+      return data?.message?.content ?? JSON.stringify(data);
     } catch (err: any) {
-      return `EduAI request failed: ${err.message}`;
+      return `EduAI (Ollama) request failed: ${err.message}`;
     }
   }
+
+  if (!endpoint || !apiKey) return 'Configure eduai.endpoint and eduai.apiKey in Settings.';
+
+  try {
+    const res = await (globalThis as any).fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a helpful coding assistant inside VS Code.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2
+      })
+    } as any);
+    if (!res?.ok) {
+      const text = await res.text?.();
+      throw new Error(`HTTP ${res?.status}: ${text}`);
+    }
+    const data: any = await res.json();
+    return data?.choices?.[0]?.message?.content ?? JSON.stringify(data);
+  } catch (err: any) {
+    return `EduAI (OpenAI) request failed: ${err.message}`;
+  }
+}
+
 
   private _getHtmlForWebview(webview: vscode.Webview) {
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'chat.js'));

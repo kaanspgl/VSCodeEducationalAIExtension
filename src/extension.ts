@@ -45,10 +45,41 @@ export function deactivate() {}
 
 async function callAI(prompt: string): Promise<string | null> {
   const cfg = vscode.workspace.getConfiguration('eduai');
+  const provider = (cfg.get<string>('provider') || 'openai').toLowerCase();
   const endpoint = cfg.get<string>('endpoint') || '';
   const apiKey = cfg.get<string>('apiKey') || '';
   const model = cfg.get<string>('model') || 'gpt-4o-mini';
 
+  if (provider === 'ollama') {
+    // Default Ollama endpoint if user left it blank
+    const base = endpoint || 'http://localhost:11434/api/chat';
+    try {
+      const res = await (globalThis as any).fetch(base, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Ollama chat format (non-streaming)
+        body: JSON.stringify({
+          model: model || 'llama3.1',
+          messages: [{ role: 'user', content: prompt }],
+          stream: false
+        })
+      } as any);
+
+      if (!res?.ok) {
+        const text = await res.text?.();
+        throw new Error(`HTTP ${res?.status}: ${text}`);
+      }
+      const data: any = await res.json();
+      // Ollama returns { message: { role, content }, ... }
+      const content = data?.message?.content ?? JSON.stringify(data);
+      return content;
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`EduAI (Ollama) request failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  // Default: OpenAI-compatible
   if (!endpoint) {
     vscode.window.showErrorMessage('EduAI endpoint is not set (eduai.endpoint).');
     return null;
@@ -79,12 +110,12 @@ async function callAI(prompt: string): Promise<string | null> {
       const text = await res.text?.();
       throw new Error(`HTTP ${res?.status}: ${text}`);
     }
-
     const data: any = await res.json();
     const content = data?.choices?.[0]?.message?.content ?? JSON.stringify(data);
     return content;
   } catch (err: any) {
-    vscode.window.showErrorMessage(`EduAI request failed: ${err.message}`);
+    vscode.window.showErrorMessage(`EduAI (OpenAI) request failed: ${err.message}`);
     return null;
   }
 }
+

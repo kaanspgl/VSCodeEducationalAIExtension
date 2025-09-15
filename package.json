@@ -1,1 +1,84 @@
-{"name":"eduai-ide-assistant","displayName":"EduAI IDE Assistant","description":"AI inside VS Code: chat panel + explain selection command.","version":"0.1.0","publisher":"your-name","engines":{"vscode":"^1.89.0"},"categories":["Other"],"activationEvents":["onCommand:eduai.openChat","onCommand:eduai.explainSelection"],"main":"./out/extension.js","contributes":{"commands":[{"command":"eduai.openChat","title":"EduAI: Open Chat"},{"command":"eduai.explainSelection","title":"EduAI: Explain Selection"}],"menus":{"editor/context":[{"command":"eduai.explainSelection","when":"editorHasSelection","group":"navigation@100"}]},"configuration":{"type":"object","title":"EduAI Settings","properties":{"eduai.endpoint":{"type":"string","default":"https://api.openai.com/v1/chat/completions","description":"HTTP endpoint (OpenAI-compatible or your EduAI gateway)."},"eduai.apiKey":{"type":"string","default":"","markdownDescription":"API key (store securely, e.g., Settings Sync / Secrets)."},"eduai.model":{"type":"string","default":"gpt-4o-mini","description":"Model/preset name for your API."},"eduai.includeSelectionByDefault":{"type":"boolean","default":true,"description":"Auto-attach current editor selection when opening chat."}}}},"scripts":{"vscode:prepublish":"npm run compile","compile":"tsc -p ./","watch":"tsc -watch -p ./","pretest":"npm run compile","test":"echo \"no tests yet\""},"devDependencies":{"@types/node":"^18.19.0","@types/vscode":"^1.89.0","esbuild":"^0.23.0","typescript":"^5.6.2"}}
+{
+  "name": "eduai-ide-assistant",
+  "displayName": "EduAI IDE Assistant",
+  "description": "AI inside VS Code: chat panel + explain selection command.",
+  "version": "0.1.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.89.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:eduai.openChat",
+    "onCommand:eduai.explainSelection"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "eduai.openChat",
+        "title": "EduAI: Open Chat"
+      },
+      {
+        "command": "eduai.explainSelection",
+        "title": "EduAI: Explain Selection"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "eduai.explainSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "EduAI Settings",
+      "properties": {
+        "eduai.provider": {
+          "type": "string",
+          "default": "openai",
+          "enum": ["openai", "ollama"],
+          "description": "Which backend to call. Use 'ollama' for http://localhost:11434."
+        },
+        "eduai.endpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions",
+          "description": "HTTP endpoint (OpenAI-compatible or your EduAI gateway)."
+        },
+        "eduai.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API key (store securely, e.g., Settings Sync / Secrets)."
+        },
+        "eduai.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model/preset name for your API."
+        },
+        "eduai.includeSelectionByDefault": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-attach current editor selection when opening chat."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "echo \"no tests yet\""
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.89.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.6.2"
+  }
+}
