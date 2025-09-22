@@ -80,5 +80,46 @@
     "@types/vscode": "^1.89.0",
     "esbuild": "^0.23.0",
     "typescript": "^5.6.2"
+  },
+  "activationEvents": [
+    "onCommand:eduai.showChat"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "eduai.showChat", "title": "EduAI: Open Chat" }
+    ],
+    "configuration": {
+      "title": "EduAI",
+      "properties": {
+        "eduai.apiProvider": {
+          "type": "string",
+          "enum": ["auto", "openai", "ollama"],
+          "default": "auto",
+          "description": "Which backend to use (auto chooses by model name)."
+        },
+        "eduai.defaultModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model id (e.g., gpt-4o-mini or llama3.1:8b)."
+        },
+        "eduai.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Default creativity/temperature."
+        },
+        "eduai.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key."
+        },
+        "eduai.ollamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Ollama server URL."
+        }
+      }
+    }
   }
 }
