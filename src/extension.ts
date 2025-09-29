@@ -16,7 +16,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const meta = payload?.meta ?? {};
       const model =
         (vscode.workspace.getConfiguration('eduai').get('model') as string) ||
-        'qwen3:4b';
+        'qwen3-coder:30b';
 
       const assist: 'Socratic' | 'Hinted' | 'Show-and-Tell' | 'Direct' =
         meta.assist || 'Socratic';
@@ -27,12 +27,13 @@ export async function activate(context: vscode.ExtensionContext) {
         | 'chat'
         | 'explain'
         | 'quiz'
+        | 'quiz-eval'
         | 'review'
         | 'hints'
         | 'plan'
         | 'reflect' = meta.mode || 'chat';
 
-      const system = buildSystemPrompt(assist);
+      const system = buildSystemPrompt(assist, mode);
       const finalPrompt = buildLearningPrompt({
         userText: text,
         assist,
@@ -42,7 +43,14 @@ export async function activate(context: vscode.ExtensionContext) {
       });
 
       try {
-        const res = await callBackend({ model, prompt: finalPrompt, system });
+        const res = await callBackend({
+          model,
+          prompt: finalPrompt,
+          system,
+          // Optional: uncomment if your callBackend supports these
+          // temperature: 0.3,
+          // stream: false,
+        });
         const clean = (res.text || '')
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
           .trim();
@@ -178,7 +186,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
-function buildSystemPrompt(assist: string) {
+function buildSystemPrompt(assist: string, mode: string) {
   const base = [
     'You are a course-aware coding tutor focused on learning, not code dumping.',
     'Always tie help to objectives. Prefer Socratic questions first.',
@@ -187,6 +195,31 @@ function buildSystemPrompt(assist: string) {
   ];
   if (assist === 'Socratic')
     base.push('Do NOT provide complete solutions unless explicitly requested.');
+
+  // Mode-specific instructions for interactive quizzes
+  if (mode === 'quiz') {
+    base.push(
+      [
+        'Return ONLY a compact JSON object for a 3-question multiple-choice quiz:',
+        '{ "type":"quiz", "version":1, "title": "string",',
+        '  "questions":[ { "id":"q1", "stem":"string",',
+        '    "choices":[ {"id":"A","text":"..."}, {"id":"B","text":"..."}, {"id":"C","text":"..."}, {"id":"D","text":"..."} ] }',
+        '  ] }',
+        'Do NOT include correct answers in this JSON.',
+        'Focus stems/choices on the specific code/selection/context if provided.',
+      ].join(' ')
+    );
+  }
+  if (mode === 'quiz-eval') {
+    base.push(
+      [
+        'You will receive: the quiz JSON, the selected question id, and the chosen choice id.',
+        'Respond ONLY with JSON: { "type":"quiz-eval", "qId":"...", "choiceId":"...", "correct":true|false, "correctChoiceId":"A|B|C|D", "feedback":"short explanation" }',
+        'Keep feedback under 2 sentences.',
+      ].join(' ')
+    );
+  }
+
   return base.join(' ');
 }
 
@@ -214,22 +247,32 @@ function buildLearningPrompt({
   if (ctx.selection?.content)
     parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
   if (ctx.problems?.items?.length)
-    parts.push(
-      `Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`
-    );
+    parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
   if (ctx.tests) parts.push(`Tests: ${JSON.stringify(ctx.tests)}`);
 
-  const taskEnvelope = [
-    'When responding:',
-    '- Start with a one-line goal restatement tied to the objectives.',
-    '- If mode=hints or Assist=Socratic: return only Nudge (a question prompting next step).',
-    '- If the user clicks “Show strategy”, include Strategy (general approach) and ask a short CFU question.',
-    '- If allowed, include a Minimal Example (few lines) and one What-If counterfactual.',
-    '- End with a 1-sentence Reflection prompt.',
-  ].join('\n');
+  // Quiz/eval need clean task envelopes to keep outputs strictly JSON
+  if (mode === 'quiz') {
+    parts.push('Create a beginner-friendly, concept-focused, 3-question multiple-choice quiz.');
+    parts.push('OUTPUT: JSON only (as specified). No preamble or prose.');
+    parts.push(`User:\n${userText || 'Generate quiz for my current selection/context.'}`);
+  } else if (mode === 'quiz-eval') {
+    parts.push('Evaluate the selected choice.');
+    parts.push('OUTPUT: JSON only (as specified). No preamble or prose.');
+    parts.push(`User:\n${userText}`);
+  } else {
+    const taskEnvelope = [
+      'When responding:',
+      '- Start with a one-line goal restatement tied to the objectives.',
+      '- If mode=hints or Assist=Socratic: return only Nudge (a question prompting next step).',
+      '- If the user clicks “Show strategy”, include Strategy (general approach) and ask a short CFU question.',
+      '- If allowed, include a Minimal Example (few lines) and one What-If counterfactual.',
+      '- End with a 1-sentence Reflection prompt.',
+    ].join('\n');
 
-  parts.push(taskEnvelope);
-  parts.push(`User:\n${userText}`);
+    parts.push(taskEnvelope);
+    parts.push(`User:\n${userText}`);
+  }
+
   return parts.join('\n\n');
 }
 

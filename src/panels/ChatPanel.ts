@@ -97,7 +97,7 @@ export class ChatPanel {
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js'));
 
     const cfg = vscode.workspace.getConfiguration('eduai');
-    const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen3:4b';
+    const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen3-coder:30b';
 
     const bootJson = JSON.stringify({ model })
       .replace(/</g, '\\u003c')
