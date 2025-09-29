@@ -47,9 +47,6 @@ export async function activate(context: vscode.ExtensionContext) {
           model,
           prompt: finalPrompt,
           system,
-          // Optional: uncomment if your callBackend supports these
-          // temperature: 0.3,
-          // stream: false,
         });
         const clean = (res.text || '')
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -186,40 +183,39 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
-function buildSystemPrompt(assist: string, mode: string) {
-  const base = [
-    'You are a course-aware coding tutor focused on learning, not code dumping.',
-    'Always tie help to objectives. Prefer Socratic questions first.',
-    'Use a 3-step scaffold: (1) Nudge question, (2) Strategy, (3) Minimal example. Only show later steps if user asks or assistance policy allows.',
-    'Offer tiny check-for-understanding (2 short questions) and a 1–2 sentence reflection prompt.',
-  ];
-  if (assist === 'Socratic')
-    base.push('Do NOT provide complete solutions unless explicitly requested.');
+/* -------------------- PROMPTS -------------------- */
+// IMPORTANT: If mode is quiz/quiz-eval, we IGNORE Socratic & scaffolding rules.
 
-  // Mode-specific instructions for interactive quizzes
+function buildSystemPrompt(assist: string, mode: string) {
   if (mode === 'quiz') {
-    base.push(
-      [
-        'Return ONLY a compact JSON object for a 3-question multiple-choice quiz:',
-        '{ "type":"quiz", "version":1, "title": "string",',
-        '  "questions":[ { "id":"q1", "stem":"string",',
-        '    "choices":[ {"id":"A","text":"..."}, {"id":"B","text":"..."}, {"id":"C","text":"..."}, {"id":"D","text":"..."} ] }',
-        '  ] }',
-        'Do NOT include correct answers in this JSON.',
-        'Focus stems/choices on the specific code/selection/context if provided.',
-      ].join(' ')
-    );
+    return [
+      'Return ONLY a compact JSON quiz object:',
+      '{ "type":"quiz", "version":1, "title":"string",',
+      '  "questions":[ { "id":"q1", "stem":"string",',
+      '    "choices":[ {"id":"A","text":"..."}, {"id":"B","text":"..."}, {"id":"C","text":"..."}, {"id":"D","text":"..."} ] } ] }',
+      'Do NOT include correct answers in this JSON.',
+      'No prose before or after the JSON.',
+    ].join(' ');
   }
   if (mode === 'quiz-eval') {
-    base.push(
-      [
-        'You will receive: the quiz JSON, the selected question id, and the chosen choice id.',
-        'Respond ONLY with JSON: { "type":"quiz-eval", "qId":"...", "choiceId":"...", "correct":true|false, "correctChoiceId":"A|B|C|D", "feedback":"short explanation" }',
-        'Keep feedback under 2 sentences.',
-      ].join(' ')
-    );
+    return [
+      'You will receive the quiz JSON plus qId and choiceId.',
+      'Respond ONLY with JSON: { "type":"quiz-eval", "qId":"...", "choiceId":"...", "correct":true|false, "correctChoiceId":"A|B|C|D", "feedback":"short explanation" }',
+      'No prose before or after the JSON.',
+    ].join(' ');
   }
 
+  // Normal teaching modes (cohesive, conversational)
+  const base = [
+    'You are a course-aware coding tutor.',
+    'Speak in a warm, concise, conversational tone—like a Khan Academy tutor.',
+    'Begin with a gentle guiding question, then explain the strategy in simple language.',
+    'Offer a tiny runnable example only when it helps; keep it short.',
+    'Blend one quick check-for-understanding and a brief reflection prompt into the flow.',
+    'Avoid formal section headers; write as a cohesive explanation.',
+  ];
+  if (assist === 'Socratic')
+    base.push('Do not provide full solutions unless the student asks you to; prefer questions that unlock the next step.');
   return base.join(' ');
 }
 
@@ -238,38 +234,31 @@ function buildLearningPrompt({
 }) {
   const parts: string[] = [];
   const ctx = normalizeCtx(contextData);
-  const header = `Mode:${mode}; Assist:${assist}; Objectives:${
-    objectives.join(' | ') || 'N/A'
-  }`;
-  parts.push(header);
-  if (ctx.activeFile?.content)
-    parts.push(`Active File (truncated):\n${ctx.activeFile.content.slice(0, 6000)}`);
-  if (ctx.selection?.content)
-    parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
-  if (ctx.problems?.items?.length)
-    parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
+
+  parts.push(`Mode:${mode}; Assist:${assist}; Objectives:${objectives.join(' | ') || 'N/A'}`);
+  if (ctx.activeFile?.content) parts.push(`Active File (truncated):\n${ctx.activeFile.content.slice(0, 6000)}`);
+  if (ctx.selection?.content) parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
+  if (ctx.problems?.items?.length) parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
   if (ctx.tests) parts.push(`Tests: ${JSON.stringify(ctx.tests)}`);
 
-  // Quiz/eval need clean task envelopes to keep outputs strictly JSON
   if (mode === 'quiz') {
-    parts.push('Create a beginner-friendly, concept-focused, 3-question multiple-choice quiz.');
-    parts.push('OUTPUT: JSON only (as specified). No preamble or prose.');
+    parts.push('Create a beginner-friendly 3-question multiple-choice quiz grounded in the given selection/context if available.');
+    parts.push('OUTPUT: JSON only (as specified).');
     parts.push(`User:\n${userText || 'Generate quiz for my current selection/context.'}`);
   } else if (mode === 'quiz-eval') {
-    parts.push('Evaluate the selected choice.');
-    parts.push('OUTPUT: JSON only (as specified). No preamble or prose.');
+    parts.push('Evaluate the selected choice. OUTPUT: JSON only (as specified).');
     parts.push(`User:\n${userText}`);
   } else {
-    const taskEnvelope = [
-      'When responding:',
-      '- Start with a one-line goal restatement tied to the objectives.',
-      '- If mode=hints or Assist=Socratic: return only Nudge (a question prompting next step).',
-      '- If the user clicks “Show strategy”, include Strategy (general approach) and ask a short CFU question.',
-      '- If allowed, include a Minimal Example (few lines) and one What-If counterfactual.',
-      '- End with a 1-sentence Reflection prompt.',
+    const guidance = [
+      'Write as a cohesive tutoring conversation:',
+      '- Start with one gentle guiding question that focuses attention.',
+      '- Explain the core idea/strategy in simple terms.',
+      '- If helpful, include a very short runnable example.',
+      '- Ask one check-for-understanding question.',
+      '- End with a brief reflection.',
+      'Keep it concise. Avoid formal section labels.',
     ].join('\n');
-
-    parts.push(taskEnvelope);
+    parts.push(guidance);
     parts.push(`User:\n${userText}`);
   }
 

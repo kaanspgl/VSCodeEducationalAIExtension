@@ -29,7 +29,6 @@ export class ChatPanel {
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this.panel = panel;
     this.extensionUri = extensionUri;
-
     this.panel.webview.html = this.getHtml(this.panel.webview);
 
     this.panel.webview.onDidReceiveMessage(async (msg) => {

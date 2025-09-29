@@ -7,11 +7,11 @@
   // --- State ---------------------------------------------------------------
   let messages = [];   // {id, role, text, kind?}
   let attached = {};   // scope -> result
-  let lastQuizJson = null; // most recent quiz payload for eval
+  let lastQuizJson = null; // stored quiz for evaluation round-trips
   const uid = () => Math.random().toString(36).slice(2);
   const $ = (id) => document.getElementById(id);
 
-  // Simple objectives to display (can be expanded later)
+  // Simple objectives display
   let objectives = [
     { id: 'ob1', label: 'Explain the intent', status: 'partial' },
     { id: 'ob2', label: 'Choose a correct strategy', status: 'unassessed' },
@@ -53,10 +53,7 @@
   document.querySelectorAll('.qa')?.forEach(btn => {
     btn.addEventListener('click', () => {
       const act = btn.getAttribute('data-action');
-      if (act === 'quiz') {
-        fireQuiz(); // send immediately
-        return;
-      }
+      if (act === 'quiz') { fireQuiz(); return; } // send immediately, ignore Socratic in backend
       const map = {
         hints: 'Give only guiding questions, no answers.',
         explain: 'Explain this like Khan Academy with one tiny runnable example and two CFU questions.',
@@ -86,7 +83,7 @@
       payload: {
         text,
         meta: {
-          assist,
+          assist,      // passed but IGNORED by backend for quiz modes
           model,
           mode: 'quiz',
           objectives: objectives.map(o => o.label),
@@ -133,7 +130,6 @@
 
   // --- Handling answers -----------------------------------------------------
   function handleAnswer(text) {
-    // Try to parse JSON quiz/quiz-eval
     const parsed = tryParseJson(text);
     if (parsed && parsed.type === 'quiz' && Array.isArray(parsed.questions)) {
       lastQuizJson = parsed;
@@ -146,8 +142,7 @@
       persist();
       return;
     }
-    // Fallback: normal assistant message
-    appendAI(text);
+    appendAI(text); // normal message
   }
 
   function tryParseJson(s) {
@@ -189,9 +184,15 @@
     if (!quiz || !Array.isArray(quiz.questions)) return '';
     const blocks = quiz.questions.map(q => `
       <div class="q" data-qid="${q.id}">
-        <div><b>Q: </b>${escapeHtml(q.stem || '')}</div>
-        <div class="choices">
-          ${q.choices.map(c => `<button class="choice" data-choice="${c.id}" data-qid="${q.id}">${escapeHtml(c.text)}</button>`).join('')}
+        <div class="stem"><b>Q:</b> ${escapeHtml(q.stem || '')}</div>
+        ${q.choices.map(c => `
+          <label class="choice">
+            <input type="radio" name="rad-${msgId}-${q.id}" value="${c.id}">
+            <span>${escapeHtml(c.text)}</span>
+          </label>
+        `).join('')}
+        <div class="actions">
+          <button class="btn secondary submit-q" data-qid="${q.id}" data-msg="${msgId}">Submit</button>
         </div>
         <div class="feedback" id="fb-${q.id}"></div>
       </div>
@@ -210,21 +211,28 @@
   }
 
   function wireMessageActions(root) {
-    // Copy/Insert/etc for normal messages could be wired here if needed.
-    // Quiz choice click handlers:
-    root.querySelectorAll('.quiz .choice').forEach(btn => {
+    // Per-question submit
+    root.querySelectorAll('.submit-q').forEach(btn => {
       btn.addEventListener('click', () => {
         const qId = btn.getAttribute('data-qid');
-        const choiceId = btn.getAttribute('data-choice');
-        // disable this question's choices
-        const container = btn.closest('.choices');
-        container.querySelectorAll('.choice').forEach(b => b.classList.add('disabled'));
+        const msgId = btn.getAttribute('data-msg');
+        const group = `rad-${msgId}-${qId}`;
+        const selected = root.querySelector(`input[name="${group}"]:checked`);
+        const fb = document.getElementById(`fb-${qId}`);
+        if (!selected) {
+          if (fb) fb.textContent = 'Pick an option before submitting.';
+          return;
+        }
+        const choiceId = selected.value;
+        // Disable inputs for this q
+        root.querySelectorAll(`input[name="${group}"]`).forEach(inp => inp.disabled = true);
+        btn.disabled = true;
         evalQuizChoice(qId, choiceId);
       });
     });
   }
 
-  // --- Quiz evaluation round-trip ------------------------------------------
+  // --- Quiz evaluation ------------------------------------------------------
   function evalQuizChoice(qId, choiceId) {
     if (!lastQuizJson || !qId || !choiceId) return;
     const assist = $('assist')?.value || 'Socratic';
@@ -232,18 +240,14 @@
 
     setStatus('Grading…');
 
-    const evalPayload = JSON.stringify({
-      quiz: lastQuizJson,
-      qId,
-      choiceId
-    });
+    const evalPayload = JSON.stringify({ quiz: lastQuizJson, qId, choiceId });
 
     vscode.postMessage({
       type: 'ask',
       payload: {
         text: `Evaluate this quiz answer:\n${evalPayload}`,
         meta: {
-          assist,
+          assist, // ignored in backend for quiz-eval
           model,
           mode: 'quiz-eval',
           objectives: objectives.map(o => o.label),
@@ -254,23 +258,24 @@
   }
 
   function applyQuizEval(res) {
-    // res: { type:"quiz-eval", qId, choiceId, correct, correctChoiceId, feedback }
     const fb = document.getElementById(`fb-${res.qId}`);
     if (!fb) return;
-    const qBlock = fb.closest('.q');
-    if (!qBlock) return;
+    const isCorrect = !!res.correct;
+    fb.textContent = res.feedback || (isCorrect ? 'Correct!' : 'Not quite.');
 
-    const choices = qBlock.querySelectorAll('.choice');
-    choices.forEach(btn => {
-      if (btn.getAttribute('data-choice') === res.choiceId) {
-        btn.classList.add(res.correct ? 'correct' : 'incorrect');
+    // Add a small chip-style marker to chosen & correct answers (visual cue)
+    const chosen = document.querySelector(`input[value="${res.choiceId}"][name^="rad-"][name$="-${res.qId}"]`);
+    if (chosen) {
+      const label = chosen.closest('label.choice');
+      if (label) label.classList.add(isCorrect ? 'correct' : 'incorrect');
+    }
+    if (!isCorrect && res.correctChoiceId) {
+      const correct = document.querySelector(`input[value="${res.correctChoiceId}"][name^="rad-"][name$="-${res.qId}"]`);
+      if (correct) {
+        const label = correct.closest('label.choice');
+        if (label) label.classList.add('correct');
       }
-      // highlight correct answer if provided and user was wrong
-      if (res.correct === false && res.correctChoiceId && btn.getAttribute('data-choice') === String(res.correctChoiceId)) {
-        btn.classList.add('correct');
-      }
-    });
-    fb.textContent = res.feedback || (res.correct ? 'Correct!' : 'Not quite.');
+    }
   }
 
   // --- Helpers --------------------------------------------------------------
