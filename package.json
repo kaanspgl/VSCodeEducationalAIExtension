@@ -1,7 +1,7 @@
 {
   "name": "eduai-ide-assistant",
   "displayName": "EduAI IDE Assistant",
-  "description": "AI inside VS Code: chat panel + explain selection command.",
+  "description": "AI inside VS Code: chat panel + explain/ask selection + ask file from Explorer.",
   "version": "0.1.0",
   "publisher": "your-name",
   "engines": {
@@ -10,83 +10,67 @@
   "categories": [
     "Other"
   ],
+
+  "main": "./out/extension.js",
+
   "activationEvents": [
     "onCommand:eduai.openChat",
-    "onCommand:eduai.explainSelection"
+    "onCommand:eduai.showChat",
+    "onCommand:eduai.askSelection",
+    "onCommand:eduai.askFile"
   ],
-  "main": "./out/extension.js",
+
   "contributes": {
     "commands": [
-      {
-        "command": "eduai.openChat",
-        "title": "EduAI: Open Chat"
-      },
-      {
-        "command": "eduai.explainSelection",
-        "title": "EduAI: Explain Selection"
-      }
+      { "command": "eduai.openChat", "title": "EduAI: Open Tutor Chat" },
+      { "command": "eduai.showChat", "title": "EduAI: Open Chat (Legacy)" },
+      { "command": "eduai.askSelection", "title": "EduAI: Ask About Selection" },
+      { "command": "eduai.askFile", "title": "EduAI: Ask About This File" }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "eduai.explainSelection",
-          "when": "editorHasSelection",
-          "group": "navigation@100"
+          "command": "eduai.askSelection",
+          "group": "navigation@9",
+          "when": "editorHasSelection && !inInteractivePlayground"
+        },
+        {
+          "command": "eduai.openChat",
+          "group": "navigation@9"
         }
+      ],
+      "editor/title": [
+        {
+          "command": "eduai.openChat",
+          "group": "navigation@9",
+          "when": "resourceExtname =~ /./"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "eduai.askFile",
+          "group": "navigation@9",
+          "when": "resourceScheme == file"
+        }
+      ],
+      "commandPalette": [
+        { "command": "eduai.openChat" },
+        { "command": "eduai.showChat" },
+        { "command": "eduai.askSelection" },
+        { "command": "eduai.askFile" }
       ]
     },
-    "configuration": {
-      "type": "object",
-      "title": "EduAI Settings",
-      "properties": {
-        "eduai.provider": {
-          "type": "string",
-          "default": "openai",
-          "enum": ["openai", "ollama"],
-          "description": "Which backend to call. Use 'ollama' for http://localhost:11434."
-        },
-        "eduai.endpoint": {
-          "type": "string",
-          "default": "https://api.openai.com/v1/chat/completions",
-          "description": "HTTP endpoint (OpenAI-compatible or your EduAI gateway)."
-        },
-        "eduai.apiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "API key (store securely, e.g., Settings Sync / Secrets)."
-        },
-        "eduai.model": {
-          "type": "string",
-          "default": "gpt-4o-mini",
-          "description": "Model/preset name for your API."
-        },
-        "eduai.includeSelectionByDefault": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-attach current editor selection when opening chat."
-        }
+    "keybindings": [
+      {
+        "command": "eduai.openChat",
+        "key": "ctrl+alt+e",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "eduai.askSelection",
+        "key": "ctrl+alt+/",
+        "when": "editorHasSelection && editorTextFocus"
       }
-    }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile",
-    "test": "echo \"no tests yet\""
-  },
-  "devDependencies": {
-    "@types/node": "^18.19.0",
-    "@types/vscode": "^1.89.0",
-    "esbuild": "^0.23.0",
-    "typescript": "^5.6.2"
-  },
-  "activationEvents": [
-    "onCommand:eduai.showChat"
-  ],
-  "contributes": {
-    "commands": [
-      { "command": "eduai.showChat", "title": "EduAI: Open Chat" }
     ],
     "configuration": {
       "title": "EduAI",
@@ -97,10 +81,41 @@
           "default": "auto",
           "description": "Which backend to use (auto chooses by model name)."
         },
+        "eduai.provider": {
+          "type": "string",
+          "enum": ["openai", "ollama"],
+          "default": "openai",
+          "description": "Deprecated: use 'eduai.apiProvider'."
+        },
+        "eduai.endpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions",
+          "description": "HTTP endpoint (OpenAI-compatible or your EduAI gateway)."
+        },
+        "eduai.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key."
+        },
+        "eduai.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Deprecated: use 'eduai.openaiApiKey'."
+        },
+        "eduai.ollamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Ollama server URL."
+        },
+        "eduai.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Preferred model id (e.g., gpt-4o-mini or qwen3-coder:30b)."
+        },
         "eduai.defaultModel": {
           "type": "string",
           "default": "gpt-4o-mini",
-          "description": "Model id (e.g., gpt-4o-mini or llama3.1:8b)."
+          "description": "Fallback model id for legacy code paths."
         },
         "eduai.temperature": {
           "type": "number",
@@ -109,17 +124,27 @@
           "maximum": 1,
           "description": "Default creativity/temperature."
         },
-        "eduai.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "OpenAI API key."
-        },
-        "eduai.ollamaUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:11434",
-          "description": "Ollama server URL."
+        "eduai.includeSelectionByDefault": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-attach current editor selection when opening chat."
         }
       }
     }
+  },
+
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "echo \"no tests yet\""
+  },
+
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.89.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.6.2"
   }
 }

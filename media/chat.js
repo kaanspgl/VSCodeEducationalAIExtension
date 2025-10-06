@@ -13,8 +13,8 @@
 
   // Simple objectives display
   let objectives = [
-    { id: 'ob1', label: 'Explain the intent', status: 'partial' },
-    { id: 'ob2', label: 'Choose a correct strategy', status: 'unassessed' },
+    { id: 'ob1', label: 'Understand the intent', status: 'partial' },
+    { id: 'ob2', label: 'Pick a strategy', status: 'unassessed' },
     { id: 'ob3', label: 'Generalize with a what-if', status: 'unassessed' },
   ];
   renderObjectives();
@@ -29,6 +29,13 @@
       const { language, selection, filename } = payload || {};
       const part = selection ? `\n\nSelection (\`${language}\`, ${filename}):\n\n${selection}` : '';
       if ($('prompt')) $('prompt').value = ( $('prompt').value || '' ) + part;
+    } else if (type === 'presetPrompt') {
+      const { text, autoSend } = payload || {};
+      if ($('prompt')) {
+        $('prompt').value = text || '';
+        $('prompt').focus();
+      }
+      if (autoSend) setTimeout(() => { $('send')?.click(); }, 10);
     } else if (type === 'ctx:result') {
       attached[payload.scope] = payload.result;
       renderContext();
@@ -49,15 +56,24 @@
   on('exportJson', 'click', () => vscode.postMessage({ type: 'thread:export', payload: { format: 'json', messages } }));
   on('clearChat', 'click', () => { messages = []; render(); persist(); });
 
+  // Scope chips (Active file / Selection / Problems / Tests)
+  document.querySelectorAll('[data-scope]')?.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const scope = btn.getAttribute('data-scope');
+      if (!scope) return;
+      vscode.postMessage({ type: 'ctx:request', payload: { scope } });
+    });
+  });
+
   // Quick actions
   document.querySelectorAll('.qa')?.forEach(btn => {
     btn.addEventListener('click', () => {
       const act = btn.getAttribute('data-action');
       if (act === 'quiz') { fireQuiz(); return; } // send immediately, ignore Socratic in backend
       const map = {
-        hints: 'Give only guiding questions, no answers.',
-        explain: 'Explain this like Khan Academy with one tiny runnable example and two CFU questions.',
-        plan: 'Show a step-by-step plan with subgoals and pitfalls.',
+        hints: 'Give 2–3 guiding hints that unlock the next step. Do not reveal the final answer.',
+        explain: 'Teach this like Khan Academy in 6–10 sentences with one tiny runnable example and 1 CFU.',
+        plan: 'Show a short step-by-step plan with pitfalls and checkpoints.',
         review: 'Review this code for correctness, readability, and edge cases. Provide a short diff patch.',
         reflect: 'Ask me for a 1–2 sentence reflection about what I changed and why.',
       };
@@ -83,11 +99,12 @@
       payload: {
         text,
         meta: {
-          assist,      // passed but IGNORED by backend for quiz modes
+          assist,
           model,
           mode: 'quiz',
           objectives: objectives.map(o => o.label),
           context: attached,
+          history: getRecentHistory()
         }
       }
     });
@@ -113,6 +130,7 @@
           mode: inferModeFromText(text),
           objectives: objectives.map(o => o.label),
           context: attached,
+          history: getRecentHistory()
         }
       }
     });
@@ -121,7 +139,7 @@
   function inferModeFromText(t) {
     if (/CFU|quiz/i.test(t)) return 'quiz';
     if (/review/i.test(t)) return 'review';
-    if (/hints/i.test(t)) return 'hints';
+    if (/hints?/i.test(t)) return 'hints';
     if (/plan/i.test(t)) return 'plan';
     if (/reflect/i.test(t)) return 'reflect';
     if (/explain/i.test(t)) return 'explain';
@@ -219,7 +237,7 @@
         const group = `rad-${msgId}-${qId}`;
         const selected = root.querySelector(`input[name="${group}"]:checked`);
         const fb = document.getElementById(`fb-${qId}`);
-        if (!selected) {
+       	if (!selected) {
           if (fb) fb.textContent = 'Pick an option before submitting.';
           return;
         }
@@ -257,13 +275,13 @@
     });
   }
 
+  // Apply graded feedback
   function applyQuizEval(res) {
     const fb = document.getElementById(`fb-${res.qId}`);
     if (!fb) return;
     const isCorrect = !!res.correct;
     fb.textContent = res.feedback || (isCorrect ? 'Correct!' : 'Not quite.');
 
-    // Add a small chip-style marker to chosen & correct answers (visual cue)
     const chosen = document.querySelector(`input[value="${res.choiceId}"][name^="rad-"][name$="-${res.qId}"]`);
     if (chosen) {
       const label = chosen.closest('label.choice');
@@ -279,6 +297,26 @@
   }
 
   // --- Helpers --------------------------------------------------------------
+  function getRecentHistory(limit = 8, maxChars = 4000) {
+  const flat = [];
+  for (let i = messages.length - 1; i >= 0 && flat.length < limit; i--) {
+    const m = messages[i];
+    if (m.kind === 'quiz') continue; // skip quiz JSON blobs
+    flat.push({ role: m.role, text: m.text.slice(0, 800) });
+  }
+  // most-recent-first; trim to maxChars
+  let used = 0;
+  const picked = [];
+  for (const h of flat) {
+    const len = (h.text || '').length + 20;
+    if (used + len > maxChars) break;
+    picked.push(h);
+    used += len;
+  }
+  return picked;
+}
+
+  
   function renderContext() {
     const count = Object.keys(attached).length;
     if ($('attachedCount')) $('attachedCount').textContent = String(count);
@@ -286,16 +324,20 @@
 
   function renderObjectives() {
     const host = $('objectives'); if (!host) return;
-    host.innerHTML = objectives.map(o => `<button class="chip" data-obj="${o.id}">${dot(o.status)}${escapeHtml(o.label)}</button>`).join('');
+    host.innerHTML = objectives
+      .map(o => `<button class="chip" data-obj="${o.id}" title="Click to cycle status">${dot(o.status)}${escapeHtml(o.label)}</button>`)
+      .join('');
     host.querySelectorAll('[data-obj]').forEach(btn => {
       btn.addEventListener('click', () => cycleObjStatus(btn.getAttribute('data-obj')));
     });
   }
+
   function cycleObjStatus(id) {
     const o = objectives.find(x => x.id === id); if (!o) return;
     o.status = o.status === 'unassessed' ? 'partial' : o.status === 'partial' ? 'done' : 'unassessed';
     renderObjectives();
   }
+
   function dot(status) {
     const color = status === 'done' ? '#10b981' : status === 'partial' ? '#f59e0b' : '#9ca3af';
     return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>`;
@@ -313,7 +355,7 @@
     return fenced.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
   }
 
-  // Persist restore
+  // Persist / restore
   function persist() { try { vscode.setState({ messages, attached, lastQuizJson, objectives }); } catch {} }
   (function restore() {
     try {

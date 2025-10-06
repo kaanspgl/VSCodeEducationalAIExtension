@@ -26,6 +26,13 @@ export class ChatPanel {
     ChatPanel.currentPanel = new ChatPanel(panel, extensionUri);
   }
 
+  /** Allow other commands to send messages into the webview */
+  public static postToWebview(message: any) {
+    if (ChatPanel.currentPanel) {
+      ChatPanel.currentPanel.panel.webview.postMessage(message);
+    }
+  }
+
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this.panel = panel;
     this.extensionUri = extensionUri;
@@ -126,32 +133,35 @@ export class ChatPanel {
     <div class="row gap">
       <div class="title">EduAI • Tutor <span id="status" class="badge">Idle</span></div>
       <div class="grow"></div>
-      <label class="control">
+
+      <label class="control" title="Model provider / size">
         <span class="hint">Model</span>
         <select id="model"></select>
       </label>
-      <label class="control">
+
+      <label class="control" title="How the tutor responds">
         <span class="hint">Assist</span>
         <select id="assist">
-          <option value="Socratic">Socratic</option>
-          <option value="Hinted">Hinted</option>
-          <option value="Show-and-Tell">Show-and-Tell</option>
-          <option value="Direct">Direct</option>
+          <option title="1 focused question → hint → short unblock" value="Socratic">Socratic</option>
+          <option title="2–3 hints and a plan" value="Hinted">Hinted</option>
+          <option title="Teach step-by-step with a tiny example" value="Show-and-Tell">Show-and-Tell</option>
+          <option title="Give the solution first (then why)" value="Direct">Direct</option>
         </select>
       </label>
-      <span class="badge" id="tokenStats">0 tokens</span>
+
+      <span class="badge" id="tokenStats" title="Approximate token usage">0 tokens</span>
     </div>
 
-    <div class="row wrap">
+    <div class="row">
       <div id="objectives" class="chips" aria-label="Objectives"></div>
       <div class="grow"></div>
       <div class="chips">
-        <button class="chip qa" data-action="hints">Hints Only</button>
-        <button class="chip qa" data-action="explain">Explain</button>
-        <button class="chip qa" data-action="quiz">CFU Quiz</button>
-        <button class="chip qa" data-action="plan">Plan Steps</button>
-        <button class="chip qa" data-action="review">Code Review</button>
-        <button class="chip qa" data-action="reflect">Reflect</button>
+        <button class="chip qa" data-action="explain" title="Clear explanation with a tiny example">Explain</button>
+        <button class="chip qa" data-action="quiz" title="Quick 3-question check">CFU Quiz</button>
+        <button class="chip qa" data-action="review" title="Light code review with patch">Code Review</button>
+        <button class="chip qa" data-action="plan" title="Step plan with pitfalls">Plan Steps</button>
+        <button class="chip qa" data-action="hints" title="Hints only">Hints Only</button>
+        <button class="chip qa" data-action="reflect" title="Prompt self-explanation">Reflect</button>
       </div>
     </div>
   </header>
@@ -161,12 +171,12 @@ export class ChatPanel {
   </main>
 
   <footer class="composer">
-    <div class="toolbar row wrap">
+    <div class="toolbar row" data-advanced="false">
       <span class="hint">Context:</span>
-      <button class="chip" data-scope="activeFile">Active file</button>
-      <button class="chip" data-scope="selection">Selection</button>
-      <button class="chip" data-scope="problems">Problems</button>
-      <button class="chip" data-scope="tests">Tests</button>
+      <button class="chip" data-scope="activeFile" title="Attach current file">Active file</button>
+      <button class="chip" data-scope="selection" title="Attach selection">Selection</button>
+      <button class="chip" data-scope="problems" title="Top diagnostics">Problems</button>
+      <button class="chip" data-scope="tests" title="Test summary">Tests</button>
       <div class="grow"></div>
       <button class="chip ghost" id="newThread">New</button>
       <button class="chip ghost" id="saveThread">Save</button>
@@ -175,9 +185,9 @@ export class ChatPanel {
       <button class="chip danger" id="clearChat">Clear</button>
     </div>
 
-    <textarea id="prompt" placeholder="Ask for help… or click a Quick Action (Hints, Explain, CFU, Plan, Review, Reflect)"></textarea>
+    <textarea id="prompt" placeholder="Ask for help… or click Explain / CFU Quiz"></textarea>
     <div class="composer-row">
-      <button id="use-selection" class="btn secondary">Use Selection</button>
+      <button id="use-selection" class="btn secondary" title="Insert your current selection into the prompt">Use Selection</button>
       <div class="grow hint">Attached: <span id="attachedCount">0</span></div>
       <button id="send" class="btn">Send</button>
     </div>
