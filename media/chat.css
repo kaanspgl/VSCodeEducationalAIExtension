@@ -1,154 +1,153 @@
-:root {
+:root{
   --bg: var(--vscode-editor-background);
   --panel: var(--vscode-editorWidget-background);
-  --muted: var(--vscode-descriptionForeground);
   --text: var(--vscode-foreground);
+  --muted: var(--vscode-descriptionForeground);
   --border: var(--vscode-editorWidget-border);
   --accent: var(--vscode-focusBorder);
   --btn: var(--vscode-button-background);
   --btn-fg: var(--vscode-button-foreground);
   --input: var(--vscode-input-background);
   --input-fg: var(--vscode-input-foreground);
-  --radius: 12px;
+
+  --chip: color-mix(in srgb, var(--panel) 88%, transparent);
+  --shadow: 0 10px 24px rgba(0,0,0,.18);
+
+  --r-xl: 16px;
+  --r-lg: 12px;
+  --r-md: 10px;
 }
 
-html {
-  color-scheme: light dark;
-  background-color: var(--bg);
+html, body { height:100%; margin:0; }
+body { background: var(--bg); color: var(--text); font: 13.5px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+* { box-sizing: border-box; }
+
+/* Top bar */
+.topbar{
+  display:flex; align-items:center; gap:.75rem;
+  padding:.6rem .8rem; border-bottom:1px solid var(--border); background:var(--panel);
+  position:sticky; top:0; z-index:10;
+}
+.brand{ display:flex; align-items:center; gap:.5rem; font-weight:800; letter-spacing:.2px; }
+.dot{ width:10px; height:10px; border-radius:50%; background:linear-gradient(145deg,#6ea8fe,#8ae2cf); box-shadow:0 0 10px #6ea8fe; }
+.grow{ flex:1; }
+.badge{ padding:2px 8px; border:1px solid var(--border); border-radius:999px; font-size:11px; color:var(--muted); }
+
+.control{ display:flex; align-items:center; gap:.35rem; }
+.control .hint{ color:var(--muted); font-size:12px; }
+.control select{ background:var(--input); color:var(--input-fg); border:1px solid var(--border); border-radius:8px; padding:4px 8px; }
+
+.seg{ margin-left:8px; display:flex; gap:.35rem; background:var(--chip); padding:.25rem; border-radius:999px; border:1px solid var(--border); }
+.seg-btn{ border:0; background:transparent; color:var(--muted); padding:.35rem .65rem; border-radius:999px; cursor:pointer; }
+.seg-btn.active{ background:var(--bg); color:var(--text); }
+
+/* Main 3-pane grid */
+.main{
+  display:grid; grid-template-columns: 248px 1fr 340px; gap:12px; padding:12px;
+}
+.pane{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-xl);
+  min-height:0; overflow:hidden; display:flex; flex-direction:column; box-shadow:var(--shadow);
+}
+.pane-header{
+  padding:10px 12px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:.5rem; font-weight:600;
+}
+.pill{ font-size:.75rem; padding:.15rem .5rem; border:1px solid var(--border); border-radius:999px; background:var(--chip); color:var(--text); }
+.muted{ color:var(--muted); }
+
+.group{ padding:10px 12px; }
+.group-title{ font-size:.8rem; opacity:.85; margin:6px 2px 8px; }
+.chips{ display:flex; gap:6px; flex-wrap:wrap; }
+.chip{
+  border:1px solid var(--border); border-radius:999px; padding:4px 10px; cursor:pointer; font-size:12px;
+  background:transparent;
+}
+.chip:hover{ outline:1px solid var(--accent); }
+
+/* Center: chat */
+.chat{ display:flex; flex-direction:column; min-height:0; }
+.scroll{ flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+.msg{ display:flex; gap:8px; }
+.avatar{ width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--chip); border:1px solid var(--border); }
+.bubble{ border:1px solid var(--border); border-radius:12px; padding:8px; flex:1; background:color-mix(in srgb, var(--panel) 85%, transparent); }
+.meta{ font-size:11px; color:var(--muted); margin-top:4px; }
+pre{ margin:6px 0; padding:8px; border:1px solid var(--border); border-radius:10px; overflow:auto; background:var(--bg); }
+
+/* Quiz */
+.quiz{ display:grid; gap:10px; }
+.quiz .q{ border:1px dashed var(--border); border-radius:10px; padding:8px; }
+.quiz .stem{ margin-bottom:6px; }
+.quiz .choice{ display:flex; align-items:center; gap:8px; margin:3px 0; }
+.quiz .choice input{ accent-color: var(--accent); }
+.quiz .choice.correct{ outline:1px solid #10b981; }
+.quiz .choice.incorrect{ outline:1px solid #ef4444; }
+.quiz .actions{ margin-top:6px; }
+.quiz .feedback{ margin-top:6px; font-size:12px; color:var(--muted); }
+
+/* Composer */
+.composer{ border-top:1px solid var(--border); display:flex; gap:8px; padding:10px; background:var(--panel); }
+.composer textarea{
+  flex:1; min-height:60px; resize:vertical;
+  background:var(--input); color:var(--input-fg); border:1px solid var(--border); border-radius:12px; padding:10px;
+}
+.composer-row{ display:flex; gap:8px; align-items:center; }
+.btn{ background:var(--btn); color:var(--btn-fg); border:none; border-radius:10px; padding:6px 10px; cursor:pointer; }
+.btn.secondary{ background:transparent; color:var(--text); border:1px solid var(--border); }
+.hint{ color:var(--muted); font-size:12px; }
+
+/* Right tabs */
+.tabs{ display:flex; gap:6px; padding:8px 8px 0; border-bottom:1px solid var(--border); }
+.tab{ border:1px solid var(--border); background:var(--bg); border-radius:999px; padding:.35rem .7rem; cursor:pointer; color:var(--muted); }
+.tab.active{ color:var(--text); background:var(--panel); }
+.tabpanes{ flex:1; overflow:auto; padding:10px; display:flex; flex-direction:column; gap:10px; }
+.card{ border:1px solid var(--border); border-radius:12px; background:var(--bg); padding:10px; }
+.card h4{ margin:0 0 6px 0; }
+
+/* Compact (half-screen): hide side rails, show floating toggles */
+@media (max-width: 1100px){
+  .main{ grid-template-columns: 1fr; }
+  .left, .right{ display:none; }
+  .floating{ position:fixed; right:16px; bottom:16px; display:flex; gap:8px; z-index:50; }
+  .float-btn{ border:1px solid var(--border); background:var(--panel); border-radius:999px; padding:.55rem .8rem; box-shadow:var(--shadow); cursor:pointer; }
+}
+
+/* Balance for light/dark in webview hosts */
+@media (prefers-color-scheme: dark){
+  .bubble{ background: color-mix(in srgb, var(--panel) 75%, transparent); }
+}
+
+/* --- Text color fixes (dark + light themes) --- */
+
+/* Let form controls pick the proper palette */
+html { color-scheme: light dark; }
+
+/* Always fall back to general text color if a token is missing */
+body,
+.bubble,
+.bubble p,
+.bubble pre,
+.bubble code,
+.bubble kbd,
+.bubble samp {
   color: var(--text);
 }
 
-
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; padding: 0; }
-
-body {
-  background: color-mix(in srgb, var(--vscode-editor-background) 80%, white);
-  color: color-mix(in srgb, var(--vscode-foreground) 80%, black);
+/* Inputs / selects / buttons should never be black on dark */
+.composer textarea,
+select,
+input,
+button {
+  color: var(--input-fg, var(--text));
 }
 
-.messages, .composer, .header {
-  background: color-mix(in srgb, var(--vscode-editorWidget-background) 85%, white);
+/* Placeholder legibility */
+.composer textarea::placeholder {
+  color: color-mix(in srgb, var(--text) 55%, transparent);
 }
 
-.bubble {
-  background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, white);
-}
-
-
-/* --- Header: compact, two rows --- */
-.header {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  display: grid;
-  gap: 8px;
-}
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.gap { gap: 12px; }
-.grow { flex: 1; }
-
-.title { font-weight: 600; opacity: .9; }
-.badge { padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
-
-.chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip {
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 10px;
-  cursor: pointer; font-size: 12px;
-  background: transparent;
-}
-.chip:hover { outline: 1px solid var(--accent); }
-.chip[aria-pressed="true"] { background: var(--input); }
-
-.chip.danger { color: #dc2626; border-color: #dc2626; }
-.chip.correct { border-color: #10b981; color: #10b981; }
-.chip.incorrect { border-color: #ef4444; color: #ef4444; }
-
-.content { display: flex; flex-direction: column; gap: 10px; }
-.messages {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-  overflow: auto;
-}
-
-.msg { display: flex; gap: 8px; margin-bottom: 8px; }
-.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; }
-.bubble { border: 1px solid var(--border); border-radius: 12px; padding: 8px; flex: 1; }
-.meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
-
-/* Quiz blocks */
-.quiz { display: grid; gap: 10px; }
-.quiz .q { border: 1px dashed var(--border); border-radius: 10px; padding: 8px; }
-.quiz .stem { margin-bottom: 6px; }
-.quiz .choice { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-.quiz .choice input { accent-color: var(--accent); }
-.quiz .actions { margin-top: 6px; }
-.quiz .feedback { margin-top: 6px; font-size: 12px; color: var(--muted); }
-
-/* Composer */
-.composer {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px;
-  display: grid;
-  gap: 8px;
-}
-.composer textarea {
-  width: 100%;
-  min-height: 60px;
-  resize: vertical;
-  background: var(--input); color: var(--input-fg);
-  border: 1px solid var(--border);
-  border-radius: 12px; padding: 10px;
-}
-.composer-row { display: flex; gap: 8px; align-items: center; }
-.btn {
-  background: var(--btn); color: var(--btn-fg);
-  border: none; border-radius: 10px; padding: 6px 10px; cursor: pointer;
-}
-.btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
-.hint { color: var(--muted); font-size: 12px; }
-
-/* Hide advanced toolbar by default (declutter) */
-.toolbar .advanced { display: none; }
-.toolbar[data-advanced="true"] .advanced { display: inline-flex; }
-
-/* Responsive */
-@media (max-width: 860px) {
-  body { padding: 8px; gap: 8px; }
-  .header { padding: 8px; }
-}
-
-
-/* --- Fallback theme balance --- */
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: #1e1e1e;
-    color: #f0f0f0;
-  }
-  .header, .messages, .composer {
-    background-color: #252526;
-  }
-  .bubble {
-    background-color: #2d2d2d;
-  }
-}
-
-@media (prefers-color-scheme: light) {
-  body {
-    background-color: #f7f7f7;
-    color: #222;
-  }
-  .header, .messages, .composer {
-    background-color: #ffffff;
-  }
-  .bubble {
-    background-color: #f2f2f2;
-  }
+/* Ensure quiz choices and right-panel cards inherit too */
+label.choice span,
+.card {
+  color: var(--text);
 }

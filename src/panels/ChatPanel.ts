@@ -100,23 +100,21 @@ export class ChatPanel {
   private getHtml(webview: vscode.Webview) {
     const nonce = getNonce();
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.css'));
-    const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js'));
+    const jsUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js'));
 
     const cfg = vscode.workspace.getConfiguration('eduai');
     const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen3-coder:30b';
 
     const bootJson = JSON.stringify({ model })
-      .replace(/</g, '\\u003c')
-      .replace(/>/g, '\\u003e')
-      .replace(/&/g, '\\u0026');
+      .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 
     const csp = [
       "default-src 'none'",
       `img-src ${webview.cspSource} data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `script-src 'nonce-${nonce}'`,
-      "font-src 'self' data:",
-      "connect-src https: http: ws:",
+      "font-src data:",
+      "connect-src https: http: ws:"
     ].join('; ');
 
     return `<!DOCTYPE html>
@@ -129,74 +127,117 @@ export class ChatPanel {
   <title>EduAI — Tutor</title>
 </head>
 <body>
-  <header class="header">
-    <div class="row gap">
-      <div class="title">EduAI • Tutor <span id="status" class="badge">Idle</span></div>
-      <div class="grow"></div>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>EduAI</div>
 
-      <label class="control" title="Model provider / size">
-        <span class="hint">Model</span>
-        <select id="model"></select>
-      </label>
-
-      <label class="control" title="How the tutor responds">
-        <span class="hint">Assist</span>
-        <select id="assist">
-          <option title="1 focused question → hint → short unblock" value="Socratic">Socratic</option>
-          <option title="2–3 hints and a plan" value="Hinted">Hinted</option>
-          <option title="Teach step-by-step with a tiny example" value="Show-and-Tell">Show-and-Tell</option>
-          <option title="Give the solution first (then why)" value="Direct">Direct</option>
-        </select>
-      </label>
-
-      <span class="badge" id="tokenStats" title="Approximate token usage">0 tokens</span>
+    <!-- Segmented learning modes (mirrors Assist) -->
+    <div class="seg" role="tablist" aria-label="Learning Mode">
+      <button class="seg-btn active" data-assist="Socratic"  role="tab" aria-selected="true">Socratic</button>
+      <button class="seg-btn"         data-assist="Hinted"    role="tab">Hinted</button>
+      <button class="seg-btn"         data-assist="Show-and-Tell" role="tab">Show & Tell</button>
+      <button class="seg-btn"         data-assist="Direct"    role="tab">Direct</button>
     </div>
 
-    <div class="row">
-      <div id="objectives" class="chips" aria-label="Objectives"></div>
-      <div class="grow"></div>
-      <div class="chips">
-        <button class="chip qa" data-action="explain" title="Clear explanation with a tiny example">Explain</button>
-        <button class="chip qa" data-action="quiz" title="Quick 3-question check">CFU Quiz</button>
-        <button class="chip qa" data-action="review" title="Light code review with patch">Code Review</button>
-        <button class="chip qa" data-action="plan" title="Step plan with pitfalls">Plan Steps</button>
-        <button class="chip qa" data-action="hints" title="Hints only">Hints Only</button>
-        <button class="chip qa" data-action="reflect" title="Prompt self-explanation">Reflect</button>
-      </div>
-    </div>
+    <div class="grow"></div>
+
+    <label class="control" title="Model">
+      <span class="hint">Model</span>
+      <select id="model"></select>
+    </label>
+
+    <span id="tokenStats" class="badge" title="Approximate token usage">0 tokens</span>
+    <span id="status" class="badge">Idle</span>
   </header>
 
-  <main class="content">
-    <section id="log" class="messages" aria-live="polite"></section>
+  <!-- Three-pane main -->
+  <main class="main">
+    <!-- Left: Context & Actions -->
+    <aside class="pane left" aria-label="Context and Actions">
+      <div class="pane-header">
+        <span class="pill">Context</span><span class="muted">Auto</span>
+      </div>
+
+      <section class="group">
+        <div class="group-title">Quick Actions</div>
+        <div class="chips">
+          <button class="chip qa" data-action="explain"  title="Clear explanation with a tiny example">Explain</button>
+          <button class="chip qa" data-action="quiz"     title="Quick 3-question check">CFU Quiz</button>
+          <button class="chip qa" data-action="review"   title="Light code review with patch">Code Review</button>
+          <button class="chip qa" data-action="plan"     title="Steps with pitfalls">Plan Steps</button>
+          <button class="chip qa" data-action="hints"    title="Hints only">Hints Only</button>
+          <button class="chip qa" data-action="reflect"  title="Short reflection">Reflect</button>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">Attach Context</div>
+        <div class="chips">
+          <button class="chip" data-scope="activeFile" title="Attach current file">Active file</button>
+          <button class="chip" data-scope="selection"  title="Attach selection">Selection</button>
+          <button class="chip" data-scope="problems"   title="Attach top diagnostics">Problems</button>
+          <button class="chip" data-scope="tests"      title="Attach test summary">Tests</button>
+        </div>
+        <div class="hint" style="margin-top:6px">Attached: <span id="attachedCount">0</span></div>
+      </section>
+
+      <section class="group">
+        <div class="group-title">Learning Objectives</div>
+        <div id="objectives" class="chips"></div>
+      </section>
+    </aside>
+
+    <!-- Center: Chat -->
+    <section class="pane chat" aria-label="Conversation">
+      <div id="log" class="scroll" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+      <div class="composer">
+        <textarea id="prompt" placeholder="Ask for help… or click a Quick Action"></textarea>
+        <div class="composer-row">
+          <button id="use-selection" class="btn secondary" title="Insert your current selection into the prompt">Use Selection</button>
+          <div class="grow hint">Ctrl/Cmd + Enter to send</div>
+          <button id="send" class="btn">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Learning / Session -->
+    <aside class="pane right" aria-label="Learning Resources">
+      <div class="pane-header"><span class="pill">Learning</span><span class="muted">Resources</span></div>
+
+      <div class="tabs" role="tablist" aria-label="Right Tabs">
+        <button class="tab active" data-tab="explanation" aria-selected="true">Explanation</button>
+        <button class="tab" data-tab="history">History</button>
+        <button class="tab" data-tab="quizzes">Quizzes</button>
+      </div>
+
+      <div class="tabpanes" id="tabpanes">
+        <div class="card" data-pane="explanation">
+          <h4>Concept Breakdown</h4>
+          <div class="muted">Summaries aligned with your current chat.</div>
+        </div>
+        <div class="card" data-pane="history" style="display:none;">
+          <h4>Recent Sessions</h4>
+          <div class="muted">Your last saved explanations & snippets.</div>
+        </div>
+        <div class="card" data-pane="quizzes" style="display:none;">
+          <h4>Practice</h4>
+          <div class="muted">Auto-generated MCQs with instant feedback.</div>
+        </div>
+      </div>
+    </aside>
   </main>
 
-  <footer class="composer">
-    <div class="toolbar row" data-advanced="false">
-      <span class="hint">Context:</span>
-      <button class="chip" data-scope="activeFile" title="Attach current file">Active file</button>
-      <button class="chip" data-scope="selection" title="Attach selection">Selection</button>
-      <button class="chip" data-scope="problems" title="Top diagnostics">Problems</button>
-      <button class="chip" data-scope="tests" title="Test summary">Tests</button>
-      <div class="grow"></div>
-      <button class="chip ghost" id="newThread">New</button>
-      <button class="chip ghost" id="saveThread">Save</button>
-      <button class="chip ghost" id="exportMd">Export .md</button>
-      <button class="chip ghost" id="exportJson">Export .json</button>
-      <button class="chip danger" id="clearChat">Clear</button>
-    </div>
-
-    <textarea id="prompt" placeholder="Ask for help… or click Explain / CFU Quiz"></textarea>
-    <div class="composer-row">
-      <button id="use-selection" class="btn secondary" title="Insert your current selection into the prompt">Use Selection</button>
-      <div class="grow hint">Attached: <span id="attachedCount">0</span></div>
-      <button id="send" class="btn">Send</button>
-    </div>
-  </footer>
+  <!-- Floating toggles (shown in compact / half-screen) -->
+  <div class="floating" id="floatToggles" style="display:none;">
+    <button class="float-btn" id="openContext">Context</button>
+    <button class="float-btn" id="openLearning">Learning</button>
+  </div>
 
   <script nonce="${nonce}">
     window.__EDUAI_BOOT__ = ${bootJson};
-    (function initBoot() {
-      try {
+    (function initBoot(){
+      try{
         var boot = window.__EDUAI_BOOT__ || {};
         var modelSel = document.getElementById('model');
         if (modelSel && boot.model) {
@@ -206,16 +247,17 @@ export class ChatPanel {
           opt.selected = true;
           modelSel.appendChild(opt);
         }
-      } catch (e) { console.error('boot init failed', e); }
+      } catch(e){}
     })();
   </script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;
   }
+  
 }
 
-function getNonce() {
+function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let s = '';
   for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
