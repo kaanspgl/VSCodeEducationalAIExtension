@@ -11,6 +11,9 @@
   const uid = () => Math.random().toString(36).slice(2);
   const $ = (id) => document.getElementById(id);
 
+  // left actions + assist
+  const _state = { assist: 'Socratic', action: 'chat' }; // action influences "mode"
+
   // Learning objectives (UI only)
   let objectives = [
     { id: 'ob1', label: 'Understand the intent', status: 'partial' },
@@ -33,7 +36,12 @@
       if ($('prompt')) { $('prompt').value = text || ''; $('prompt').focus(); }
       if (autoSend) setTimeout(() => { $('send')?.click(); }, 10);
     } else if (type === 'ctx:result') {
-      attached[payload.scope] = payload.result; renderContext();
+      attached[payload.scope] = payload.result;
+      // mark chip + toast
+      const btn = document.querySelector(`.chip[data-scope="${payload.scope}"]`);
+      if (btn) btn.classList.add('attached');
+      renderContext();
+      appendInfo(`Attached: ${prettyScope(payload.scope)}.`);
     } else if (type === 'thread:exported') {
       const a = document.createElement('a'); a.href = payload.href; a.download = ''; a.click(); a.remove();
     } else if (type === 'usage') {
@@ -43,15 +51,12 @@
   });
 
   // ---------- Wire UI ----------
-  // segmented assist mirror
+  // segmented assist mirror (top bar)
   document.querySelectorAll('.seg-btn')?.forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      const value = btn.getAttribute('data-assist');
-      const sel = document.getElementById('model'); // (keep Model select)
-      // We keep Assist implicit via seg; backend reads meta.assist from here:
-      _state.assist = value || 'Socratic';
+      _state.assist = btn.getAttribute('data-assist') || 'Socratic';
     });
   });
 
@@ -66,12 +71,11 @@
 
   on('use-selection', 'click', () => vscode.postMessage({ type: 'requestActiveContext' }));
   on('send', 'click', runChat);
-
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runChat();
   });
 
-  // context chips
+  // left: context chips
   document.querySelectorAll('[data-scope]')?.forEach(btn => {
     btn.addEventListener('click', () => {
       const scope = btn.getAttribute('data-scope');
@@ -80,11 +84,17 @@
     });
   });
 
-  // quick actions
+  // left: quick actions — set active + (optionally) prefill prompt
   document.querySelectorAll('.qa')?.forEach(btn => {
     btn.addEventListener('click', () => {
+      document.querySelectorAll('.qa').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
       const act = btn.getAttribute('data-action');
+      _state.action = act || 'chat'; // used as mode unless user types something that clearly implies a different mode
+
       if (act === 'quiz') { fireQuiz(); return; }
+
       const map = {
         hints:   'Give 2–3 guiding hints that unlock the next step. Do not reveal the final answer.',
         explain: 'Teach this in 6–10 sentences with one tiny runnable example and 1 CFU.',
@@ -134,8 +144,6 @@
   }
 
   // ---------- Chat actions ----------
-  const _state = { assist: 'Socratic' };
-
   function runChat(){
     const text = ($('prompt')?.value || '').trim();
     if (!text) return;
@@ -144,6 +152,12 @@
     setStatus('Thinking…');
 
     const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+
+    // If user typed something that obviously implies a mode, let that win;
+    // otherwise respect the selected quick action.
+    const implied = inferModeFromText(text);
+    const mode = implied === 'chat' ? _state.action : implied;
+
     vscode.postMessage({
       type: 'ask',
       payload: {
@@ -151,7 +165,7 @@
         meta: {
           assist: _state.assist,
           model,
-          mode: inferModeFromText(text),
+          mode,
           objectives: objectives.map(o => o.label),
           context: attached,
           history: getRecentHistory()
@@ -195,12 +209,13 @@
   function handleAnswer(text){
     const parsed = tryParseJson(text);
     if (parsed && parsed.type === 'quiz' && Array.isArray(parsed.questions)){
-      lastQuizJson = parsed; appendQuiz(parsed); persist(); return;
+      lastQuizJson = parsed; appendQuiz(parsed); updateRightPane('quiz'); persist(); return;
     }
     if (parsed && parsed.type === 'quiz-eval' && parsed.qId){
-      applyQuizEval(parsed); persist(); return;
+      applyQuizEval(parsed); updateRightPane('quiz'); persist(); return;
     }
     appendAI(text);
+    updateRightPane('explanation', text);
   }
 
   function tryParseJson(s){
@@ -212,8 +227,8 @@
   }
 
   // ---------- Render ----------
-  function appendUser(text){ messages.push({ id: uid(), role: 'user', text }); render(); persist(); }
-  function appendAI(text){   messages.push({ id: uid(), role: 'assistant', text }); render(); persist(); }
+  function appendUser(text){ messages.push({ id: uid(), role: 'user', text }); render(); persist(); updateRightPane('history'); }
+  function appendAI(text){   messages.push({ id: uid(), role: 'assistant', text }); render(); persist(); updateRightPane('history'); }
   function appendQuiz(q){    messages.push({ id: uid(), role: 'assistant', kind:'quiz', text: JSON.stringify(q) }); render(); }
 
   function render(){
@@ -314,6 +329,42 @@
     });
   }
 
+  // ---------- Right pane updates ----------
+  function updateRightPane(kind, payload){
+    if (kind === 'history'){
+      const pane = document.querySelector('[data-pane="history"]');
+      if (!pane) return;
+      const list = pane.querySelector('.list') || (()=>{ const d=document.createElement('div'); d.className='list'; pane.innerHTML=''; pane.appendChild(d); return d; })();
+      list.innerHTML = messages.slice(-8).map(m => `
+        <div class="list-item"><b>${m.role === 'assistant' ? 'Tutor' : 'You'}:</b> ${escapeHtml((m.text||'').slice(0,180))}</div>
+      `).join('');
+      if (!messages.length) pane.innerHTML = '<div class="empty">No recent messages yet.</div>';
+      return;
+    }
+
+    if (kind === 'explanation'){
+      const pane = document.querySelector('[data-pane="explanation"]');
+      if (!pane) return;
+      const text = String(payload || '').trim();
+      if (!text){ pane.innerHTML = '<h4>Concept Breakdown</h4><div class="muted">Summaries aligned with your current chat.</div>'; return; }
+      const first = text.split(/\n+/).find(Boolean) || text.slice(0,240);
+      pane.innerHTML = `
+        <h4>Concept Breakdown</h4>
+        <div>${renderMarkdown(escapeHtml(first))}</div>
+      `;
+      return;
+    }
+
+    if (kind === 'quiz'){
+      const pane = document.querySelector('[data-pane="quizzes"]');
+      if (!pane) return;
+      const count = (lastQuizJson?.questions?.length || 0);
+      pane.innerHTML = count
+        ? `<h4>Practice</h4><div class="muted">Latest quiz with <b>${count}</b> question${count===1?'':'s'} generated.</div>`
+        : `<h4>Practice</h4><div class="muted">No quizzes yet. Use “CFU Quiz”.</div>`;
+    }
+  }
+
   // ---------- Helpers ----------
   function getRecentHistory(limit = 8, maxChars = 4000){
     const flat = [];
@@ -328,6 +379,13 @@
       picked.push(h); used += len;
     }
     return picked;
+  }
+
+  function prettyScope(s){
+    return s === 'activeFile' ? 'Active File' :
+           s === 'selection'  ? 'Selection' :
+           s === 'problems'   ? 'Problems'  :
+           s === 'tests'      ? 'Tests' : s;
   }
 
   function renderContext(){ const el = $('attachedCount'); if (el) el.textContent = String(Object.keys(attached).length); }
@@ -364,8 +422,13 @@
     return fenced.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
   }
 
+  function appendInfo(text){
+    messages.push({ id: uid(), role: 'assistant', text: `• ${text}` });
+    render(); updateRightPane('history');
+  }
+
   // persist/restore
-  function persist(){ try { vscode.setState({ messages, attached, lastQuizJson, objectives, assist:_state.assist }); } catch {} }
+  function persist(){ try { vscode.setState({ messages, attached, lastQuizJson, objectives, assist:_state.assist, action:_state.action }); } catch {} }
   (function restore(){
     try{
       const saved = vscode.getState(); if (!saved) return;
@@ -374,9 +437,10 @@
       lastQuizJson = saved.lastQuizJson || null;
       objectives = saved.objectives || objectives;
       _state.assist = saved.assist || 'Socratic';
-      // set segmented button to saved assist
+      _state.action = saved.action || 'chat';
       document.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-assist') === _state.assist));
       render(); renderObjectives(); renderContext();
+      updateRightPane('history'); updateRightPane('quiz');
     } catch {}
   })();
 })();

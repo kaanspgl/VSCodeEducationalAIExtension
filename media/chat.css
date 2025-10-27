@@ -151,3 +151,32 @@ label.choice span,
 .card {
   color: var(--text);
 }
+
+/* Active/pressed states */
+.left .chips .chip[data-action].active {
+  background: color-mix(in srgb, #2b6fff 18%, var(--panel));
+  border-color: #2b6fff;
+  color: white;
+}
+
+.left .chips .chip[data-scope].attached {
+  outline: 1px solid var(--accent);
+}
+
+/* Right pane list styling */
+.right .list {
+  display: grid;
+  gap: 8px;
+}
+.right .list-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  font-size: 12.5px;
+}
+
+.right .empty {
+  color: var(--muted);
+  font-size: 12.5px;
+}
