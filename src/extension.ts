@@ -1,3 +1,4 @@
+// src/extension.ts
 import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
 import { callBackend } from './shared/callBackend';
@@ -99,9 +100,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('eduai.backend.chat', async (payload: any) => {
       const text = payload?.text ?? payload;
       const meta = payload?.meta ?? {};
+      const cfg = vscode.workspace.getConfiguration('eduai');
+
       const model =
-        vscode.workspace.getConfiguration('eduai').get<string>('model') ||
-        'qwen3-coder:30b';
+        cfg.get<string>('model') ||
+        cfg.get<string>('gemini.model') ||
+        'gemini-2.0-pro';
+
       const assist = meta.assist || 'Socratic';
       const objectives = Array.isArray(meta.objectives) ? meta.objectives.slice(0, 6) : [];
       const mode = meta.mode || 'chat';
@@ -130,7 +135,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return {
           text: clean,
           usage: res.usage,
-          meta: { model, provider: 'ollama', assist, mode },
+          meta: { model, provider: res.provider, assist, mode },
         };
       } catch (err: any) {
         throw new Error(`Chat failed: ${err?.message || err}`);

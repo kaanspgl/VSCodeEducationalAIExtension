@@ -3,7 +3,7 @@
   "displayName": "EduAI IDE Assistant",
   "description": "AI inside VS Code: chat panel + explain/ask selection + ask file from Explorer.",
   "version": "0.1.0",
-  "publisher": "your-name",
+  "publisher": "Necmi Kaan Sapoglu",
   "engines": {
     "vscode": "^1.89.0"
   },
@@ -91,15 +91,9 @@
       "properties": {
         "eduai.apiProvider": {
           "type": "string",
-          "enum": ["auto", "openai", "ollama"],
-          "default": "auto",
+          "enum": ["auto", "openai", "ollama", "gemini"],
+          "default": "gemini",
           "description": "Which backend to use (auto chooses by model name)."
-        },
-        "eduai.provider": {
-          "type": "string",
-          "enum": ["openai", "ollama"],
-          "default": "openai",
-          "description": "Deprecated: use 'eduai.apiProvider'."
         },
         "eduai.endpoint": {
           "type": "string",
@@ -111,11 +105,6 @@
           "default": "",
           "description": "OpenAI API key."
         },
-        "eduai.apiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Deprecated: use 'eduai.openaiApiKey'."
-        },
         "eduai.ollamaUrl": {
           "type": "string",
           "default": "http://127.0.0.1:11434",
@@ -123,12 +112,22 @@
         },
         "eduai.model": {
           "type": "string",
-          "default": "gpt-4o-mini",
-          "description": "Preferred model id (e.g., gpt-4o-mini or qwen3-coder:30b)."
+          "default": "gemini-2.0-flash",
+          "description": "Preferred model id."
+        },
+        "eduai.gemini.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google AI Studio / Gemini API key."
+        },
+        "eduai.gemini.model": {
+          "type": "string",
+          "default": "gemini-2.0-flash",
+          "description": "Gemini model id (e.g., gemini-1.5-pro, gemini-1.5-flash)."
         },
         "eduai.defaultModel": {
           "type": "string",
-          "default": "gpt-4o-mini",
+          "default": "gemini-1.5-pro",
           "description": "Fallback model id for legacy code paths."
         },
         "eduai.temperature": {
@@ -145,6 +144,7 @@
         }
       }
     }
+    
   },
 
   "scripts": {
