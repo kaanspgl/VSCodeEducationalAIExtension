@@ -20,41 +20,41 @@ export async function activate(context: vscode.ExtensionContext) {
   // Ask about current selection: opens panel, injects selection, presets prompt
   context.subscriptions.push(
     vscode.commands.registerCommand('eduai.askSelection', async () => {
-    const ed = vscode.window.activeTextEditor;
-    if (!ed) {
-      vscode.window.showInformationMessage('No active editor.');
-      return;
-    }
-    const sel = ed.selection;
-    if (!sel || sel.isEmpty) {
-      vscode.window.showInformationMessage('Select some text first.');
-      return;
-    }
+      const ed = vscode.window.activeTextEditor;
+      if (!ed) {
+        vscode.window.showInformationMessage('No active editor.');
+        return;
+      }
+      const sel = ed.selection;
+      if (!sel || sel.isEmpty) {
+        vscode.window.showInformationMessage('Select some text first.');
+        return;
+      }
 
-    const doc = ed.document;
-    const language = doc.languageId;
-    const filename = doc.uri.toString();
-    const selection = doc.getText(sel).slice(0, 10000);
+      const doc = ed.document;
+      const language = doc.languageId;
+      const filename = doc.uri.toString();
+      const selection = doc.getText(sel).slice(0, 10000);
 
-    // Open the chat panel
-    ChatPanel.createOrShow(context.extensionUri);
+      // Open the chat panel
+      ChatPanel.createOrShow(context.extensionUri);
 
-    // Give it a moment to load before sending message
-    setTimeout(() => {
-      ChatPanel.postToWebview({
-        type: 'activeContext',
-        payload: { language, filename, selection }
-      });
+      // Give it a moment to load before sending message
+      setTimeout(() => {
+        ChatPanel.postToWebview({
+          type: 'activeContext',
+          payload: { language, filename, selection }
+        });
 
-      ChatPanel.postToWebview({
-        type: 'presetPrompt',
-        payload: {
-          text: `Explain this ${language} code step by step: \n\n${selection}`,
-          autoSend: false
-        }
-      });
-    }, 200);
-  })
+        ChatPanel.postToWebview({
+          type: 'presetPrompt',
+          payload: {
+            text: `Explain this ${language} code step by step: \n\n${selection}`,
+            autoSend: false
+          }
+        });
+      }, 200);
+    })
   );
 
   // Ask about a file from Explorer context menu
@@ -242,6 +242,23 @@ export async function activate(context: vscode.ExtensionContext) {
       console.log('feedback', messageId, value);
     })
   );
+
+  // === Quick Action commands -> tell the webview to activate that action ===
+  const quick = (action: string) => {
+    ChatPanel.createOrShow(context.extensionUri);
+    setTimeout(() => {
+      ChatPanel.postToWebview({ type: 'quickAction', payload: { action } });
+    }, 100);
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('eduai.quick.explain', () => quick('explain')),
+    vscode.commands.registerCommand('eduai.quick.review',  () => quick('review')),
+    vscode.commands.registerCommand('eduai.quick.plan',    () => quick('plan')),
+    vscode.commands.registerCommand('eduai.quick.hints',   () => quick('hints')),
+    vscode.commands.registerCommand('eduai.quick.reflect', () => quick('reflect')),
+    vscode.commands.registerCommand('eduai.quick.quiz',    () => quick('quiz')),
+  );
 }
 
 export function deactivate() {}
@@ -302,21 +319,21 @@ function buildLearningPrompt({
   objectives,
   mode,
   contextData,
-  history = []        // ✅ default
+  history = []
 }: {
   userText: string;
   assist: string;
   objectives: string[];
   mode: string;
   contextData: any;
-  history?: ChatTurn[];   // ✅ allow history
+  history?: ChatTurn[];
 }) {
   const parts: string[] = [];
   const ctx = normalizeCtx(contextData);
 
   parts.push(`Mode:${mode}; Assist:${assist}; Objectives:${objectives.join(' | ') || 'N/A'}`);
 
-  // ✅ include recent chat if present
+  // include recent chat if present
   if (history?.length) {
     const lines = history
       .slice(0, 8)
@@ -355,7 +372,6 @@ function buildLearningPrompt({
 
   return parts.join('\n\n');
 }
-
 
 function normalizeCtx(ctx: any) {
   return {

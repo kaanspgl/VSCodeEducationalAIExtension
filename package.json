@@ -20,58 +20,72 @@
     "onCommand:eduai.askFile"
   ],
 
-  "contributes": {
-    "commands": [
-      { "command": "eduai.openChat", "title": "EduAI: Open Tutor Chat" },
-      { "command": "eduai.showChat", "title": "EduAI: Open Chat (Legacy)" },
-      { "command": "eduai.askSelection", "title": "EduAI: Ask About Selection" },
-      { "command": "eduai.askFile", "title": "EduAI: Ask About This File" }
-    ],
-    "menus": {
-      "editor/context": [
-        {
-          "command": "eduai.askSelection",
-          "group": "navigation@9",
-          "when": "editorHasSelection && !inInteractivePlayground"
-        },
-        {
-          "command": "eduai.openChat",
-          "group": "navigation@9"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "eduai.openChat",
-          "group": "navigation@9",
-          "when": "resourceExtname =~ /./"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "eduai.askFile",
-          "group": "navigation@9",
-          "when": "resourceScheme == file"
-        }
-      ],
-      "commandPalette": [
-        { "command": "eduai.openChat" },
-        { "command": "eduai.showChat" },
-        { "command": "eduai.askSelection" },
-        { "command": "eduai.askFile" }
-      ]
-    },
-    "keybindings": [
-      {
-        "command": "eduai.openChat",
-        "key": "ctrl+alt+e",
-        "when": "editorTextFocus"
-      },
+"contributes": {
+  "commands": [
+    { "command": "eduai.openChat",     "title": "EduAI: Focus Assistant" },
+    { "command": "eduai.showChat",     "title": "EduAI: Open Chat (Legacy)" },
+    { "command": "eduai.askSelection", "title": "EduAI: Ask About Selection" },
+    { "command": "eduai.askFile",      "title": "EduAI: Ask About This File" },
+
+    { "command": "eduai.quick.explain","title": "EduAI: Explain Code" },
+    { "command": "eduai.quick.review", "title": "EduAI: Code Review" },
+    { "command": "eduai.quick.plan",   "title": "EduAI: Plan Steps" },
+    { "command": "eduai.quick.hints",  "title": "EduAI: Hints Only" },
+    { "command": "eduai.quick.reflect","title": "EduAI: Reflection Prompt" },
+    { "command": "eduai.quick.quiz",   "title": "EduAI: CFU Quiz" }
+  ],
+  "menus": {
+    "editor/context": [
       {
         "command": "eduai.askSelection",
-        "key": "ctrl+alt+/",
-        "when": "editorHasSelection && editorTextFocus"
+        "group": "navigation@9",
+        "when": "editorHasSelection && !inInteractivePlayground"
+      },
+      {
+        "command": "eduai.openChat",
+        "group": "navigation@10",
+        "when": "editorTextFocus"
       }
     ],
+    "editor/title": [
+      {
+        "command": "eduai.openChat",
+        "group": "navigation@9",
+        "when": "resourceExtname =~ /./"
+      }
+    ],
+    "explorer/context": [
+      {
+        "command": "eduai.askFile",
+        "group": "navigation@9",
+        "when": "resourceScheme == file"
+      }
+    ],
+    "commandPalette": [
+      { "command": "eduai.openChat" },
+      { "command": "eduai.showChat" },
+      { "command": "eduai.askSelection" },
+      { "command": "eduai.askFile" },
+
+      { "command": "eduai.quick.explain" },
+      { "command": "eduai.quick.review" },
+      { "command": "eduai.quick.plan" },
+      { "command": "eduai.quick.hints" },
+      { "command": "eduai.quick.reflect" },
+      { "command": "eduai.quick.quiz" }
+    ]
+  },
+  "keybindings": [
+    { "command": "eduai.openChat",      "key": "ctrl+alt+e", "when": "editorTextFocus" },
+    { "command": "eduai.askSelection",  "key": "ctrl+alt+/", "when": "editorHasSelection && editorTextFocus" },
+
+    { "command": "eduai.quick.explain", "key": "ctrl+alt+1", "when": "editorTextFocus" },
+    { "command": "eduai.quick.review",  "key": "ctrl+alt+2", "when": "editorTextFocus" },
+    { "command": "eduai.quick.plan",    "key": "ctrl+alt+3", "when": "editorTextFocus" },
+    { "command": "eduai.quick.hints",   "key": "ctrl+alt+4", "when": "editorTextFocus" },
+    { "command": "eduai.quick.reflect", "key": "ctrl+alt+5", "when": "editorTextFocus" },
+    { "command": "eduai.quick.quiz",    "key": "ctrl+alt+6", "when": "editorTextFocus" }
+  ],
     "configuration": {
       "title": "EduAI",
       "properties": {

@@ -5,156 +5,163 @@
   const boot = (window.__EDUAI_BOOT__ || { model: 'qwen3-coder:30b' });
 
   // ---------- State ----------
-  let messages = [];          // {id, role, text, kind?}
+  let messages = [];
   let attached = {};          // scope -> result
-  let lastQuizJson = null;    // quiz JSON to grade
+  let lastQuizJson = null;
+  let busy = false;
+
   const uid = () => Math.random().toString(36).slice(2);
   const $ = (id) => document.getElementById(id);
 
-  // left actions + assist
-  const _state = { assist: 'Socratic', action: 'chat' }; // action influences "mode"
+  const _state = { assist: 'Socratic', action: 'chat' };
 
-  // Learning objectives (UI only)
+  // Learning objectives
   let objectives = [
-    { id: 'ob1', label: 'Understand the intent', status: 'partial' },
+    { id: 'ob1', label: 'Understand the intent', status: 'unassessed' },
     { id: 'ob2', label: 'Pick a strategy',       status: 'unassessed' },
     { id: 'ob3', label: 'Generalize a what-if',  status: 'unassessed' },
   ];
   renderObjectives();
 
+  // Toast element
+  let toastEl;
+  function ensureToast(){
+    if (toastEl) return toastEl;
+    toastEl = document.createElement('div');
+    toastEl.className = 'toast';
+    toastEl.id = 'eduaiToast';
+    document.body.appendChild(toastEl);
+    return toastEl;
+  }
+  function toast(msg, ms=1700){
+    const el = ensureToast();
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(()=> el.classList.remove('show'), ms);
+  }
+
   // ---------- Host → Webview ----------
   window.addEventListener('message', (event) => {
     const { type, payload } = event.data || {};
+
     if (type === 'answer') {
-      handleAnswer(payload); setStatus('Idle');
-    } else if (type === 'activeContext') {
-      const { language, selection, filename } = payload || {};
-      const part = selection ? `\n\nSelection (\`${language}\`, ${filename}):\n\n${selection}` : '';
-      if ($('prompt')) $('prompt').value = ( $('prompt').value || '' ) + part;
-    } else if (type === 'presetPrompt') {
-      const { text, autoSend } = payload || {};
-      if ($('prompt')) { $('prompt').value = text || ''; $('prompt').focus(); }
-      if (autoSend) setTimeout(() => { $('send')?.click(); }, 10);
-    } else if (type === 'ctx:result') {
-      attached[payload.scope] = payload.result;
-      // mark chip + toast
-      const btn = document.querySelector(`.chip[data-scope="${payload.scope}"]`);
-      if (btn) btn.classList.add('attached');
+      handleAnswer(payload);
+      setBusy(false);
+      setStatus('Idle');
+    }
+
+    // Background-only; we don’t prefill the chat anymore.
+    else if (type === 'activeContext') { /* ignore */ }
+    else if (type === 'presetPrompt')  { /* ignore */ }
+
+    else if (type === 'ctx:result') {
+      const scope = payload?.scope;
+      const result = payload?.result || {};
+      if (!scope) return;
+
+      // If we asked to DETACH, we already removed; ignore any stray returns.
+      if (attached[scope] && result && result.__detaching) return;
+
+      // Save and mark UI
+      attached[scope] = result;
+      markAttached(scope, true);
       renderContext();
-      appendInfo(`Attached: ${prettyScope(payload.scope)}.`);
-    } else if (type === 'thread:exported') {
-      const a = document.createElement('a'); a.href = payload.href; a.download = ''; a.click(); a.remove();
-    } else if (type === 'usage') {
+      renderScopePreview(scope, result);
+      toast(`Attached: ${prettyScope(scope)} ${compactSummary(scope, result)}`);
+    }
+
+    else if (type === 'ctx:error') {
+      toast(`Failed to attach: ${payload?.scope || 'unknown'} — ${payload?.message || 'error'}`, 2200);
+    }
+
+    else if (type === 'usage') {
       const total = payload?.totalTokens || payload?.total || 0;
       if ($('tokenStats')) $('tokenStats').textContent = `${total} tokens`;
     }
   });
 
+  // ---------- Assist dropdown ----------
+  const assistDetails = document.getElementById('assistDetails');
+  const assistLabel = document.getElementById('assistLabel');
+  if (assistDetails) {
+    assistDetails.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.tagName === 'INPUT' && t.name === 'assist') {
+        _state.assist = t.value || 'Socratic';
+        if (assistLabel) assistLabel.textContent = _state.assist;
+        setTimeout(() => assistDetails.removeAttribute('open'), 80);
+      }
+    });
+  }
+
   // ---------- Wire UI ----------
-  // segmented assist mirror (top bar)
-  document.querySelectorAll('.seg-btn')?.forEach(btn => {
+  // Toggle attach/detach on click (background)
+  document.querySelectorAll('.ctx-btn[data-scope]')?.forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      _state.assist = btn.getAttribute('data-assist') || 'Socratic';
-    });
-  });
-
-  // tabs on right
-  document.querySelectorAll('.tab')?.forEach(t => {
-    t.addEventListener('click', () => {
-      const tab = t.getAttribute('data-tab');
-      document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
-      document.querySelectorAll('[data-pane]').forEach(p => p.style.display = (p.getAttribute('data-pane') === tab) ? '' : 'none');
-    });
-  });
-
-  on('use-selection', 'click', () => vscode.postMessage({ type: 'requestActiveContext' }));
-  on('send', 'click', runChat);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runChat();
-  });
-
-  // left: context chips
-  document.querySelectorAll('[data-scope]')?.forEach(btn => {
-    btn.addEventListener('click', () => {
+      if (busy) return;
       const scope = btn.getAttribute('data-scope');
       if (!scope) return;
+
+      // Toggle: if already attached → detach
+      if (attached[scope]) {
+        delete attached[scope];
+        markAttached(scope, false);
+        renderContext();
+        clearScopePreview(scope);
+        toast(`Detached: ${prettyScope(scope)}`);
+        persist();
+        return;
+      }
+
+      // Request fresh context
       vscode.postMessage({ type: 'ctx:request', payload: { scope } });
     });
   });
 
-  // left: quick actions — set active + (optionally) prefill prompt
-  document.querySelectorAll('.qa')?.forEach(btn => {
+  // Quick actions send immediately (no user bubble)
+  document.querySelectorAll('.qa-toolbar .qa')?.forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.qa').forEach(b => b.classList.remove('active'));
+      if (busy) return;
+      document.querySelectorAll('.qa-toolbar .qa').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-
       const act = btn.getAttribute('data-action');
-      _state.action = act || 'chat'; // used as mode unless user types something that clearly implies a different mode
-
-      if (act === 'quiz') { fireQuiz(); return; }
-
-      const map = {
-        hints:   'Give 2–3 guiding hints that unlock the next step. Do not reveal the final answer.',
-        explain: 'Teach this in 6–10 sentences with one tiny runnable example and 1 CFU.',
-        plan:    'Show a short step-by-step plan with pitfalls and checkpoints.',
-        review:  'Review this code for correctness, readability, and edge cases. Provide a short diff patch.',
-        reflect: 'Ask me for a 1–2 sentence reflection about what I changed and why.',
-      };
-      if ($('prompt')) { $('prompt').value = map[act] || ''; $('prompt').focus(); }
+      _state.action = act || 'chat';
+      runQuickAction(_state.action);
     });
   });
 
-  // floating toggles in compact mode
-  on('openContext', 'click', () => showOverlay('.left', 'Context'));
-  on('openLearning', 'click', () => showOverlay('.right', 'Learning'));
-
-  // resize observer to show/hide float controls (threshold = CSS breakpoint)
-  const ro = new ResizeObserver((entries) => {
-    const w = entries[0]?.contentRect?.width || window.innerWidth;
-    const compact = w <= 1100;
-    const flo = document.getElementById('floatToggles');
-    if (flo) flo.style.display = compact ? 'flex' : 'none';
-  });
-  ro.observe(document.body);
-
-  function showOverlay(selector, label){
-    const source = document.querySelector(selector);
-    if (!source) return;
-    const pane = document.createElement('div');
-    pane.style.position='fixed'; pane.style.inset='12px';
-    pane.style.background='var(--panel)'; pane.style.border='1px solid var(--border)';
-    pane.style.borderRadius='16px'; pane.style.boxShadow='0 10px 24px rgba(0,0,0,.25)'; pane.style.zIndex='100';
-    pane.style.overflow='auto';
-    const header = document.createElement('div');
-    header.style.display='flex'; header.style.alignItems='center'; header.style.justifyContent='space-between';
-    header.style.padding='10px 12px'; header.style.borderBottom='1px solid var(--border)';
-    header.innerHTML = `<div style="font-weight:600">${label}</div>`;
-    const close = document.createElement('button');
-    close.textContent='Close';
-    close.className='btn secondary';
-    close.addEventListener('click', ()=> pane.remove());
-    header.appendChild(close);
-    pane.appendChild(header);
-    const body = document.createElement('div'); body.style.padding='10px 12px';
-    body.innerHTML = source.innerHTML;
-    pane.appendChild(body);
-    document.body.appendChild(pane);
+  // Enter submits; Shift+Enter = newline
+  const promptEl = $('prompt');
+  if (promptEl) {
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        runChat();
+      }
+    });
   }
 
-  // ---------- Chat actions ----------
+  // Buttons
+  on('use-selection', 'click', () => {
+    if (busy) return;
+    vscode.postMessage({ type: 'requestActiveContext' });
+    toast('Inserted current selection into background context');
+  });
+  on('send', 'click', runChat);
+
+  // ---------- Sending ----------
   function runChat(){
+    if (busy) return;
     const text = ($('prompt')?.value || '').trim();
     if (!text) return;
-    appendUser(text);
+
+    appendUser(text);  // show user bubble
     $('prompt').value = '';
+
+    setBusy(true);
     setStatus('Thinking…');
 
     const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
-
-    // If user typed something that obviously implies a mode, let that win;
-    // otherwise respect the selected quick action.
     const implied = inferModeFromText(text);
     const mode = implied === 'chat' ? _state.action : implied;
 
@@ -174,11 +181,42 @@
     });
   }
 
-  function fireQuiz(){
-    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
-    appendUser('[CFU Quiz]');
-    setStatus('Building quiz…');
+  function runQuickAction(act){
+    const prompts = {
+      explain: 'Explain the attached context or most recent discussion in 6–10 sentences with one tiny runnable example and 1 CFU.',
+      review:  'Review the attached code for correctness, readability, and edge cases. Provide a short diff patch.',
+      plan:    'Propose a short step-by-step plan (3–5 steps) with pitfalls and checkpoints for the attached context.',
+      hints:   'Give 2–3 guiding hints that unlock the next step based on the attached context. Do not reveal the final answer.',
+      reflect: 'Prompt me for a 1–2 sentence reflection about what I changed and why, based on our recent discussion.',
+      quiz:    'Generate a 3-question multiple-choice quiz about the attached context and the most recent discussion.'
+    };
+    const text = prompts[act] || 'Explain the attached context concisely.';
+    if (act === 'quiz') return fireQuizBackground();
 
+    setBusy(true);
+    setStatus('Thinking…');
+
+    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+    vscode.postMessage({
+      type: 'ask',
+      payload: {
+        text,
+        meta: {
+          assist: _state.assist,
+          model,
+          mode: act,
+          objectives: objectives.map(o => o.label),
+          context: attached,
+          history: getRecentHistory()
+        }
+      }
+    });
+  }
+
+  function fireQuizBackground(){
+    setBusy(true);
+    setStatus('Building…');
+    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
     vscode.postMessage({
       type: 'ask',
       payload: {
@@ -209,13 +247,12 @@
   function handleAnswer(text){
     const parsed = tryParseJson(text);
     if (parsed && parsed.type === 'quiz' && Array.isArray(parsed.questions)){
-      lastQuizJson = parsed; appendQuiz(parsed); updateRightPane('quiz'); persist(); return;
+      lastQuizJson = parsed; appendQuiz(parsed); persist(); return;
     }
     if (parsed && parsed.type === 'quiz-eval' && parsed.qId){
-      applyQuizEval(parsed); updateRightPane('quiz'); persist(); return;
+      applyQuizEval(parsed); persist(); return;
     }
     appendAI(text);
-    updateRightPane('explanation', text);
   }
 
   function tryParseJson(s){
@@ -227,8 +264,8 @@
   }
 
   // ---------- Render ----------
-  function appendUser(text){ messages.push({ id: uid(), role: 'user', text }); render(); persist(); updateRightPane('history'); }
-  function appendAI(text){   messages.push({ id: uid(), role: 'assistant', text }); render(); persist(); updateRightPane('history'); }
+  function appendUser(text){ messages.push({ id: uid(), role: 'user', text }); render(); persist(); }
+  function appendAI(text){   messages.push({ id: uid(), role: 'assistant', text }); render(); persist(); }
   function appendQuiz(q){    messages.push({ id: uid(), role: 'assistant', kind:'quiz', text: JSON.stringify(q) }); render(); }
 
   function render(){
@@ -244,11 +281,20 @@
       const quiz = tryParseJson(m.text);
       return renderQuizHtml(m.id, quiz);
     }
+    if (!isAI) {
+      return `
+        <div class="msg user">
+          <div class="avatar">👩‍💻</div>
+          <div class="bubble">${renderMarkdown(escapeHtml(m.text))}
+            <div class="meta">You</div>
+          </div>
+        </div>`;
+    }
     return `
-      <div class="msg ${isAI ? 'ai' : 'user'}">
-        <div class="avatar">${isAI ? '🧑‍🏫' : '👩‍💻'}</div>
+      <div class="msg ai">
+        <div class="avatar">🧑‍🏫</div>
         <div class="bubble">${renderMarkdown(escapeHtml(m.text))}
-          <div class="meta">${isAI ? 'Tutor' : 'You'}</div>
+          <div class="meta">Tutor</div>
         </div>
       </div>`;
   }
@@ -284,6 +330,7 @@
   function wireMessageActions(root){
     root.querySelectorAll('.submit-q').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (busy) return;
         const qId = btn.getAttribute('data-qid');
         const msgId = btn.getAttribute('data-msg');
         const group = `rad-${msgId}-${qId}`;
@@ -293,15 +340,87 @@
         const choiceId = selected.value;
         root.querySelectorAll(`input[name="${group}"]`).forEach(inp => inp.disabled = true);
         btn.disabled = true;
+
+        setBusy(true);
+        setStatus('Grading…');
+
         evalQuizChoice(qId, choiceId);
       });
     });
   }
 
+  // ---------- Context previews ----------
+  function renderScopePreview(scope, result){
+    const host = document.querySelector(`.ctx-row .ctx-btn[data-scope="${scope}"]`)?.closest('.ctx-row');
+    if (!host) return;
+    let p = host.querySelector('.ctx-preview');
+    if (!p) { p = document.createElement('div'); p.className = 'ctx-preview'; host.appendChild(p); }
+    p.textContent = prettyPreview(scope, result);
+  }
+  function clearScopePreview(scope){
+    const host = document.querySelector(`.ctx-row .ctx-btn[data-scope="${scope}"]`)?.closest('.ctx-row');
+    if (!host) return;
+    const p = host.querySelector('.ctx-preview');
+    if (p) p.remove();
+  }
+
+  function prettyPreview(scope, res){
+    if (!res) return '';
+    if (scope === 'activeFile') {
+      const lang = res.language ? `, ${res.language}` : '';
+      const bytes = (res.content || '').length;
+      return `Attached ${bytes.toLocaleString()} chars${lang}`;
+    }
+    if (scope === 'selection') {
+      const bytes = res.bytes ?? (res.content || '').length;
+      return `Attached ${bytes.toLocaleString()} chars from selection`;
+    }
+    if (scope === 'problems') {
+      const n = res.count || (res.items ? res.items.length : 0);
+      return `Attached ${n} diagnostics (top ${Math.min(n, 200)})`;
+    }
+    if (scope === 'tests') {
+      return res.summary ? `Attached: ${res.summary}` : 'Attached test summary';
+    }
+    return 'Attached';
+  }
+  function compactSummary(scope, res){
+    if (!res) return '';
+    if (scope === 'activeFile') return `(${(res.content||'').length.toLocaleString()} chars)`;
+    if (scope === 'selection')  return `(${(res.bytes ?? (res.content||'').length).toLocaleString()} chars)`;
+    if (scope === 'problems')   return `(${res.count ?? (res.items||[]).length} issues)`;
+    if (scope === 'tests')      return '';
+    return '';
+  }
+
+  // ---------- Context helpers ----------
+  function prettyScope(s){
+    return s === 'activeFile' ? 'Active File' :
+           s === 'selection'  ? 'Selection' :
+           s === 'problems'   ? 'Problems'  :
+           s === 'tests'      ? 'Tests' : s;
+  }
+  function markAttached(scope, yes){
+    const btn = document.querySelector(`.ctx-btn[data-scope="${scope}"]`);
+    if (btn) btn.classList.toggle('attached', !!yes);
+  }
+  function renderContext(){
+    const c1 = $('attachedCount');
+    const c2 = $('attachedCount2');
+    const listEl = $('attachedList');
+    const n = Object.keys(attached).length;
+    if (c1) c1.textContent = String(n);
+    if (c2) c2.textContent = String(n);
+    if (listEl) {
+      const names = Object.keys(attached).map(prettyScope);
+      listEl.textContent = names.length ? names.join(', ') : 'none';
+    }
+    persist();
+  }
+
   // ---------- Quiz grading ----------
   function evalQuizChoice(qId, choiceId){
     if (!lastQuizJson || !qId || !choiceId) return;
-    setStatus('Grading…');
     const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
     const evalPayload = JSON.stringify({ quiz: lastQuizJson, qId, choiceId });
 
@@ -316,56 +435,79 @@
 
   function applyQuizEval(res){
     const fb = document.getElementById(`fb-${res.qId}`);
-    if (!fb) return;
-    const isCorrect = !!res.correct;
-    fb.textContent = res.feedback || (isCorrect ? 'Correct!' : 'Not quite.');
+    if (fb) {
+      const isCorrect = !!res.correct;
+      fb.textContent = res.feedback || (isCorrect ? 'Correct!' : 'Not quite.');
+      document.querySelectorAll(`input[name^="rad-"][name$="-${res.qId}"]`).forEach(inp => {
+        const lab = inp.closest('label.choice'); if (!lab) return;
+        lab.classList.remove('correct','incorrect');
+        if (inp.value === res.choiceId) lab.classList.add(isCorrect ? 'correct' : 'incorrect');
+        if (!isCorrect && res.correctChoiceId && inp.value === res.correctChoiceId) lab.classList.add('correct');
+      });
+    }
+    setBusy(false);
+    setStatus('Idle');
+  }
 
-    // colorize choices
-    document.querySelectorAll(`input[name^="rad-"][name$="-${res.qId}"]`).forEach(inp => {
-      const lab = inp.closest('label.choice'); if (!lab) return;
-      lab.classList.remove('correct','incorrect');
-      if (inp.value === res.choiceId) lab.classList.add(isCorrect ? 'correct' : 'incorrect');
-      if (!isCorrect && res.correctChoiceId && inp.value === res.correctChoiceId) lab.classList.add('correct');
+  // ---------- Objectives ----------
+  function renderObjectives(){
+    const host = $('objectives'); if (!host) return;
+    host.innerHTML = objectives.map(o =>
+      `<button class="chip" data-obj="${o.id}" title="Click to cycle: Unassessed → Partial → Done">${dot(o.status)}${escapeHtml(o.label)}</button>`
+    ).join('');
+    host.querySelectorAll('[data-obj]').forEach(btn => {
+      btn.addEventListener('click', () => cycleObjStatus(btn.getAttribute('data-obj')));
+    });
+    updateLoCounts();
+  }
+  function cycleObjStatus(id){
+    const o = objectives.find(x => x.id === id); if (!o) return;
+    o.status = o.status === 'unassessed' ? 'partial' : o.status === 'partial' ? 'done' : 'unassessed';
+    renderObjectives();
+  }
+  function updateLoCounts(){
+    const counts = { unassessed:0, partial:0, done:0 };
+    for (const o of objectives) counts[o.status] = (counts[o.status]||0)+1;
+    const el = $('loCounts');
+    if (el) el.textContent = `Done: ${counts.done} • Partial: ${counts.partial} • Unassessed: ${counts.unassessed}`;
+  }
+  function dot(status){
+    const color = status === 'done' ? '#10b981' : status === 'partial' ? '#f59e0b' : '#9ca3af';
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>`;
+  }
+
+  // ---------- Status + utils ----------
+  function setBusy(v){
+    busy = !!v;
+    const send = $('send');
+    const ta = $('prompt');
+    if (send) send.disabled = busy;
+    if (ta) { ta.disabled = busy; ta.classList.toggle('disabled', busy); }
+    document.querySelectorAll('.qa-toolbar .qa, .ctx-btn').forEach(el => {
+      el.disabled = busy;
+      el.classList.toggle('disabled', busy);
     });
   }
-
-  // ---------- Right pane updates ----------
-  function updateRightPane(kind, payload){
-    if (kind === 'history'){
-      const pane = document.querySelector('[data-pane="history"]');
-      if (!pane) return;
-      const list = pane.querySelector('.list') || (()=>{ const d=document.createElement('div'); d.className='list'; pane.innerHTML=''; pane.appendChild(d); return d; })();
-      list.innerHTML = messages.slice(-8).map(m => `
-        <div class="list-item"><b>${m.role === 'assistant' ? 'Tutor' : 'You'}:</b> ${escapeHtml((m.text||'').slice(0,180))}</div>
-      `).join('');
-      if (!messages.length) pane.innerHTML = '<div class="empty">No recent messages yet.</div>';
-      return;
-    }
-
-    if (kind === 'explanation'){
-      const pane = document.querySelector('[data-pane="explanation"]');
-      if (!pane) return;
-      const text = String(payload || '').trim();
-      if (!text){ pane.innerHTML = '<h4>Concept Breakdown</h4><div class="muted">Summaries aligned with your current chat.</div>'; return; }
-      const first = text.split(/\n+/).find(Boolean) || text.slice(0,240);
-      pane.innerHTML = `
-        <h4>Concept Breakdown</h4>
-        <div>${renderMarkdown(escapeHtml(first))}</div>
-      `;
-      return;
-    }
-
-    if (kind === 'quiz'){
-      const pane = document.querySelector('[data-pane="quizzes"]');
-      if (!pane) return;
-      const count = (lastQuizJson?.questions?.length || 0);
-      pane.innerHTML = count
-        ? `<h4>Practice</h4><div class="muted">Latest quiz with <b>${count}</b> question${count===1?'':'s'} generated.</div>`
-        : `<h4>Practice</h4><div class="muted">No quizzes yet. Use “CFU Quiz”.</div>`;
+  function setStatus(s){
+    const near = document.getElementById('status2');
+    const dot = document.getElementById('status-dot');
+    const txt = String(s || 'Idle');
+    if (near) near.textContent = txt;
+    if (dot) {
+      dot.classList.remove('thinking', 'idle');
+      dot.classList.add(/thinking|building|grading|loading/i.test(txt) ? 'thinking' : 'idle');
     }
   }
 
-  // ---------- Helpers ----------
+  function on(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
+  function escapeHtml(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function renderMarkdown(md){
+    const esc = String(md);
+    const fenced = esc.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) =>
+      `<pre><code data-lang="${lang||''}">${escapeHtml(code)}</code></pre>`);
+    return fenced.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
+  }
+
   function getRecentHistory(limit = 8, maxChars = 4000){
     const flat = [];
     for (let i = messages.length - 1; i >= 0 && flat.length < limit; i--){
@@ -381,52 +523,6 @@
     return picked;
   }
 
-  function prettyScope(s){
-    return s === 'activeFile' ? 'Active File' :
-           s === 'selection'  ? 'Selection' :
-           s === 'problems'   ? 'Problems'  :
-           s === 'tests'      ? 'Tests' : s;
-  }
-
-  function renderContext(){ const el = $('attachedCount'); if (el) el.textContent = String(Object.keys(attached).length); }
-
-  function renderObjectives(){
-    const host = $('objectives'); if (!host) return;
-    host.innerHTML = objectives.map(o =>
-      `<button class="chip" data-obj="${o.id}" title="Click to cycle status">${dot(o.status)}${escapeHtml(o.label)}</button>`
-    ).join('');
-    host.querySelectorAll('[data-obj]').forEach(btn => {
-      btn.addEventListener('click', () => cycleObjStatus(btn.getAttribute('data-obj')));
-    });
-  }
-
-  function cycleObjStatus(id){
-    const o = objectives.find(x => x.id === id); if (!o) return;
-    o.status = o.status === 'unassessed' ? 'partial' : o.status === 'partial' ? 'done' : 'unassessed';
-    renderObjectives();
-  }
-
-  function dot(status){
-    const color = status === 'done' ? '#10b981' : status === 'partial' ? '#f59e0b' : '#9ca3af';
-    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>`;
-  }
-
-  function setStatus(s){ const el = $('status'); if (el) el.textContent = s; }
-  function on(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
-
-  function escapeHtml(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-  function renderMarkdown(md){
-    const esc = String(md);
-    const fenced = esc.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) =>
-      `<pre><code data-lang="${lang||''}">${escapeHtml(code)}</code></pre>`);
-    return fenced.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
-  }
-
-  function appendInfo(text){
-    messages.push({ id: uid(), role: 'assistant', text: `• ${text}` });
-    render(); updateRightPane('history');
-  }
-
   // persist/restore
   function persist(){ try { vscode.setState({ messages, attached, lastQuizJson, objectives, assist:_state.assist, action:_state.action }); } catch {} }
   (function restore(){
@@ -438,9 +534,13 @@
       objectives = saved.objectives || objectives;
       _state.assist = saved.assist || 'Socratic';
       _state.action = saved.action || 'chat';
-      document.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-assist') === _state.assist));
-      render(); renderObjectives(); renderContext();
-      updateRightPane('history'); updateRightPane('quiz');
+
+      const assistLabel = document.getElementById('assistLabel');
+      if (assistLabel) assistLabel.textContent = _state.assist;
+
+      render(); renderContext(); renderObjectives();
+      setStatus('Idle');
+      Object.keys(attached).forEach(s => { markAttached(s, true); renderScopePreview(s, attached[s]); });
     } catch {}
   })();
 })();

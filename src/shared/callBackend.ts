@@ -53,4 +53,5 @@ function approxUsage(output: string, input: string) {
   return { totalTokens: total };
 }
 
+// `fetch` is provided by VS Code web runtime in Node >=18; declare for TS.
 declare const fetch: any;

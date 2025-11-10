@@ -8,7 +8,13 @@ export class ChatPanel {
   private readonly extensionUri: vscode.Uri;
 
   public static createOrShow(extensionUri: vscode.Uri) {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.Beside;
+    // Open beside code (avoid full screen)
+    const groups = vscode.window.tabGroups.all;
+    if (groups.length === 1) {
+      void vscode.commands.executeCommand('workbench.action.splitEditorRight');
+    }
+    const column = vscode.window.tabGroups.activeTabGroup?.viewColumn ?? vscode.ViewColumn.Two;
+
     if (ChatPanel.currentPanel) {
       ChatPanel.currentPanel.panel.reveal(column);
       return;
@@ -26,7 +32,6 @@ export class ChatPanel {
     ChatPanel.currentPanel = new ChatPanel(panel, extensionUri);
   }
 
-  /** Allow other commands to send messages into the webview */
   public static postToWebview(message: any) {
     if (ChatPanel.currentPanel) {
       ChatPanel.currentPanel.panel.webview.postMessage(message);
@@ -61,6 +66,7 @@ export class ChatPanel {
             filename: (result as any)?.uri,
             selection: (selection as any)?.content,
           };
+          // still send context (background), but webview ignores auto-insert
           this.panel.webview.postMessage({ type: 'activeContext', payload });
           break;
         }
@@ -131,13 +137,19 @@ export class ChatPanel {
   <header class="topbar">
     <div class="brand"><span class="dot"></span>EduAI</div>
 
-    <!-- Segmented learning modes (mirrors Assist) -->
-    <div class="seg" role="tablist" aria-label="Learning Mode">
-      <button class="seg-btn active" data-assist="Socratic"  role="tab" aria-selected="true">Socratic</button>
-      <button class="seg-btn"         data-assist="Hinted"    role="tab">Hinted</button>
-      <button class="seg-btn"         data-assist="Show-and-Tell" role="tab">Show & Tell</button>
-      <button class="seg-btn"         data-assist="Direct"    role="tab">Direct</button>
-    </div>
+    <!-- Assist dropdown with inline explanations -->
+    <details class="assist" id="assistDetails">
+      <summary id="assistSummary">
+        <span class="hint">Assist Mode:</span>
+        <span id="assistLabel">Socratic</span>
+      </summary>
+      <div class="assist-body" role="listbox" aria-label="Assist Mode">
+        <label class="assist-opt"><input type="radio" name="assist" value="Socratic" checked> <b>Socratic</b><br><span>Asks one guiding question, then gives a small hint if you’re stuck.</span></label>
+        <label class="assist-opt"><input type="radio" name="assist" value="Hinted"> <b>Hinted</b><br><span>2–3 actionable hints and a short plan; no full solution unless asked.</span></label>
+        <label class="assist-opt"><input type="radio" name="assist" value="Show-and-Tell"> <b>Show &amp; Tell</b><br><span>Step-by-step with a tiny example and why it works.</span></label>
+        <label class="assist-opt"><input type="radio" name="assist" value="Direct"> <b>Direct</b><br><span>Solution first; then when/why to use it.</span></label>
+      </div>
+    </details>
 
     <div class="grow"></div>
 
@@ -147,92 +159,95 @@ export class ChatPanel {
     </label>
 
     <span id="tokenStats" class="badge" title="Approximate token usage">0 tokens</span>
-    <span id="status" class="badge">Idle</span>
   </header>
 
-  <!-- Three-pane main -->
-  <main class="main">
-    <!-- Left: Context & Actions -->
-    <aside class="pane left" aria-label="Context and Actions">
-      <div class="pane-header">
-        <span class="pill">Context</span><span class="muted">Auto</span>
-      </div>
-
-      <section class="group">
-        <div class="group-title">Quick Actions</div>
-        <div class="chips">
-          <button class="chip qa" data-action="explain"  title="Clear explanation with a tiny example">Explain</button>
-          <button class="chip qa" data-action="quiz"     title="Quick 3-question check">CFU Quiz</button>
-          <button class="chip qa" data-action="review"   title="Light code review with patch">Code Review</button>
-          <button class="chip qa" data-action="plan"     title="Steps with pitfalls">Plan Steps</button>
-          <button class="chip qa" data-action="hints"    title="Hints only">Hints Only</button>
-          <button class="chip qa" data-action="reflect"  title="Short reflection">Reflect</button>
-        </div>
-      </section>
-
-      <section class="group">
-        <div class="group-title">Attach Context</div>
-        <div class="chips">
-          <button class="chip" data-scope="activeFile" title="Attach current file">Active file</button>
-          <button class="chip" data-scope="selection"  title="Attach selection">Selection</button>
-          <button class="chip" data-scope="problems"   title="Attach top diagnostics">Problems</button>
-          <button class="chip" data-scope="tests"      title="Attach test summary">Tests</button>
-        </div>
-        <div class="hint" style="margin-top:6px">Attached: <span id="attachedCount">0</span></div>
-      </section>
-
-      <section class="group">
-        <div class="group-title">Learning Objectives</div>
-        <div id="objectives" class="chips"></div>
-      </section>
-    </aside>
-
-    <!-- Center: Chat -->
+  <!-- Single full-height main with sticky composer -->
+  <main class="main one">
     <section class="pane chat" aria-label="Conversation">
+      <!-- Context & Objectives dropdown (declutters UI) -->
+      <details class="ctx" id="ctxDetails">
+        <summary>
+          <span class="hint">Context & Objectives</span>
+          <span class="badge" id="ctxBadge"><span id="attachedCount">0</span> attached</span>
+        </summary>
+        <div class="ctx-body">
+          <div class="group">
+            <div class="group-title">Attach Context</div>
+            <div class="ctx-list">
+              <div class="ctx-row">
+                <div>
+                  <div class="ctx-name">Active file</div>
+                  <div class="ctx-desc">Attach the entire current editor file (truncated).</div>
+                </div>
+                <button class="chip ctx-btn" data-scope="activeFile">Attach</button>
+              </div>
+              <div class="ctx-row">
+                <div>
+                  <div class="ctx-name">Selection</div>
+                  <div class="ctx-desc">Attach only your selected code/text.</div>
+                </div>
+                <button class="chip ctx-btn" data-scope="selection">Attach</button>
+              </div>
+              <div class="ctx-row">
+                <div>
+                  <div class="ctx-name">Problems</div>
+                  <div class="ctx-desc">Attach top diagnostics (errors & warnings) across the workspace.</div>
+                </div>
+                <button class="chip ctx-btn" data-scope="problems">Attach</button>
+              </div>
+              <div class="ctx-row">
+                <div>
+                  <div class="ctx-name">Tests</div>
+                  <div class="ctx-desc">Attach a brief test summary if available.</div>
+                </div>
+                <button class="chip ctx-btn" data-scope="tests">Attach</button>
+              </div>
+            </div>
+            <div class="hint" style="margin-top:8px">
+              Attached (<span id="attachedCount2">0</span>): <span id="attachedList" class="muted">none</span>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">Learning Objectives</div>
+            <div id="objectives" class="chips"></div>
+            <div class="lo-legend">
+              Click chips to cycle: <b>Unassessed → Partial → Done</b>.
+              <div id="loCounts" class="muted" style="margin-top:4px"></div>
+            </div>
+          </div>
+        </div>
+      </details>
+
       <div id="log" class="scroll" role="log" aria-live="polite" aria-relevant="additions"></div>
 
       <div class="composer">
-        <textarea id="prompt" placeholder="Ask for help… or click a Quick Action"></textarea>
+        <!-- Quick toolbar near input -->
+        <div class="qa-toolbar" role="toolbar" aria-label="Quick actions">
+          <button class="chip qa" data-action="explain"  title="Ctrl+Alt+1">Explain</button>
+          <button class="chip qa" data-action="review"   title="Ctrl+Alt+2">Review</button>
+          <button class="chip qa" data-action="plan"     title="Ctrl+Alt+3">Plan</button>
+          <button class="chip qa" data-action="hints"    title="Ctrl+Alt+4">Hints</button>
+          <button class="chip qa" data-action="reflect"  title="Ctrl+Alt+5">Reflect</button>
+          <button class="chip qa" data-action="quiz"     title="Ctrl+Alt+6">CFU Quiz</button>
+        </div>
+
+        <textarea id="prompt" placeholder="Ask for help… or use the toolbar"></textarea>
         <div class="composer-row">
           <button id="use-selection" class="btn secondary" title="Insert your current selection into the prompt">Use Selection</button>
+
           <div class="grow hint">Ctrl/Cmd + Enter to send</div>
+
+          <div class="composer-status" aria-live="polite" aria-atomic="true">
+            <span id="status-dot" class="idle" aria-hidden="true"></span>
+            <span id="status2" class="status-text">Idle</span>
+          </div>
+
           <button id="send" class="btn">Send</button>
         </div>
       </div>
     </section>
-
-    <!-- Right: Learning / Session -->
-    <aside class="pane right" aria-label="Learning Resources">
-      <div class="pane-header"><span class="pill">Learning</span><span class="muted">Resources</span></div>
-
-      <div class="tabs" role="tablist" aria-label="Right Tabs">
-        <button class="tab active" data-tab="explanation" aria-selected="true">Explanation</button>
-        <button class="tab" data-tab="history">History</button>
-        <button class="tab" data-tab="quizzes">Quizzes</button>
-      </div>
-
-      <div class="tabpanes" id="tabpanes">
-        <div class="card" data-pane="explanation">
-          <h4>Concept Breakdown</h4>
-          <div class="muted">Summaries aligned with your current chat.</div>
-        </div>
-        <div class="card" data-pane="history" style="display:none;">
-          <h4>Recent Sessions</h4>
-          <div class="muted">Your last saved explanations & snippets.</div>
-        </div>
-        <div class="card" data-pane="quizzes" style="display:none;">
-          <h4>Practice</h4>
-          <div class="muted">Auto-generated MCQs with instant feedback.</div>
-        </div>
-      </div>
-    </aside>
   </main>
-
-  <!-- Floating toggles (shown in compact / half-screen) -->
-  <div class="floating" id="floatToggles" style="display:none;">
-    <button class="float-btn" id="openContext">Context</button>
-    <button class="float-btn" id="openLearning">Learning</button>
-  </div>
 
   <script nonce="${nonce}">
     window.__EDUAI_BOOT__ = ${bootJson};
@@ -254,7 +269,6 @@ export class ChatPanel {
 </body>
 </html>`;
   }
-  
 }
 
 function getNonce(): string {
