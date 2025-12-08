@@ -1,7 +1,7 @@
 {
-  "name": "eduai-ide-assistant",
-  "displayName": "EduAI IDE Assistant",
-  "description": "AI inside VS Code: chat panel + explain/ask selection + ask file from Explorer.",
+  "name": "vibelearner-ide-assistant",
+  "displayName": "VibeLearner IDE Assistant",
+  "description": "VibeLearner: learning-first coding tutor inside VS Code (chat + explain/ask selection + ask file).",
   "version": "0.1.0",
   "publisher": "Necmi Kaan Sapoglu",
   "engines": {
@@ -14,151 +14,121 @@
   "main": "./out/extension.js",
 
   "activationEvents": [
-    "onCommand:eduai.openChat",
-    "onCommand:eduai.showChat",
-    "onCommand:eduai.askSelection",
-    "onCommand:eduai.askFile"
+    "onCommand:vibelearner.openChat",
+    "onCommand:vibelearner.showChat",
+    "onCommand:vibelearner.askSelection",
+    "onCommand:vibelearner.askFile"
   ],
 
 "contributes": {
   "commands": [
-    { "command": "eduai.openChat",     "title": "EduAI: Focus Assistant" },
-    { "command": "eduai.showChat",     "title": "EduAI: Open Chat (Legacy)" },
-    { "command": "eduai.askSelection", "title": "EduAI: Ask About Selection" },
-    { "command": "eduai.askFile",      "title": "EduAI: Ask About This File" },
+    { "command": "vibelearner.openChat",     "title": "VibeLearner: Focus Assistant" },
+    { "command": "vibelearner.showChat",     "title": "VibeLearner: Open Chat (Legacy)" },
+    { "command": "vibelearner.askSelection", "title": "VibeLearner: Ask About Selection" },
+    { "command": "vibelearner.askFile",      "title": "VibeLearner: Ask About This File" },
 
-    { "command": "eduai.quick.explain","title": "EduAI: Explain Code" },
-    { "command": "eduai.quick.review", "title": "EduAI: Code Review" },
-    { "command": "eduai.quick.plan",   "title": "EduAI: Plan Steps" },
-    { "command": "eduai.quick.hints",  "title": "EduAI: Hints Only" },
-    { "command": "eduai.quick.reflect","title": "EduAI: Reflection Prompt" },
-    { "command": "eduai.quick.quiz",   "title": "EduAI: CFU Quiz" }
+    { "command": "vibelearner.quick.explain","title": "VibeLearner: Explain Code" },
+    { "command": "vibelearner.quick.review", "title": "VibeLearner: Code Review" },
+    { "command": "vibelearner.quick.plan",   "title": "VibeLearner: Plan Steps" },
+    { "command": "vibelearner.quick.hints",  "title": "VibeLearner: Hints Only" },
+    { "command": "vibelearner.quick.reflect","title": "VibeLearner: Reflection Prompt" },
+    { "command": "vibelearner.quick.quiz",   "title": "VibeLearner: CFU Quiz" }
   ],
   "menus": {
     "editor/context": [
       {
-        "command": "eduai.askSelection",
+        "command": "vibelearner.askSelection",
         "group": "navigation@9",
         "when": "editorHasSelection && !inInteractivePlayground"
       },
       {
-        "command": "eduai.openChat",
+        "command": "vibelearner.openChat",
         "group": "navigation@10",
         "when": "editorTextFocus"
       }
     ],
     "editor/title": [
       {
-        "command": "eduai.openChat",
+        "command": "vibelearner.openChat",
         "group": "navigation@9",
         "when": "resourceExtname =~ /./"
       }
     ],
     "explorer/context": [
       {
-        "command": "eduai.askFile",
+        "command": "vibelearner.askFile",
         "group": "navigation@9",
         "when": "resourceScheme == file"
       }
-    ],
-    "commandPalette": [
-      { "command": "eduai.openChat" },
-      { "command": "eduai.showChat" },
-      { "command": "eduai.askSelection" },
-      { "command": "eduai.askFile" },
-
-      { "command": "eduai.quick.explain" },
-      { "command": "eduai.quick.review" },
-      { "command": "eduai.quick.plan" },
-      { "command": "eduai.quick.hints" },
-      { "command": "eduai.quick.reflect" },
-      { "command": "eduai.quick.quiz" }
     ]
   },
   "keybindings": [
-    { "command": "eduai.openChat",      "key": "ctrl+alt+e", "when": "editorTextFocus" },
-    { "command": "eduai.askSelection",  "key": "ctrl+alt+/", "when": "editorHasSelection && editorTextFocus" },
+    { "command": "vibelearner.openChat",      "key": "ctrl+alt+e", "when": "editorTextFocus" },
+    { "command": "vibelearner.askSelection",  "key": "ctrl+alt+/", "when": "editorHasSelection && editorTextFocus" },
 
-    { "command": "eduai.quick.explain", "key": "ctrl+alt+1", "when": "editorTextFocus" },
-    { "command": "eduai.quick.review",  "key": "ctrl+alt+2", "when": "editorTextFocus" },
-    { "command": "eduai.quick.plan",    "key": "ctrl+alt+3", "when": "editorTextFocus" },
-    { "command": "eduai.quick.hints",   "key": "ctrl+alt+4", "when": "editorTextFocus" },
-    { "command": "eduai.quick.reflect", "key": "ctrl+alt+5", "when": "editorTextFocus" },
-    { "command": "eduai.quick.quiz",    "key": "ctrl+alt+6", "when": "editorTextFocus" }
+    { "command": "vibelearner.quick.explain", "key": "ctrl+alt+1", "when": "editorTextFocus" },
+    { "command": "vibelearner.quick.review",  "key": "ctrl+alt+2", "when": "editorTextFocus" },
+    { "command": "vibelearner.quick.plan",    "key": "ctrl+alt+3", "when": "editorTextFocus" },
+    { "command": "vibelearner.quick.hints",   "key": "ctrl+alt+4", "when": "editorTextFocus" },
+    { "command": "vibelearner.quick.reflect", "key": "ctrl+alt+5", "when": "editorTextFocus" },
+    { "command": "vibelearner.quick.quiz",    "key": "ctrl+alt+6", "when": "editorTextFocus" }
   ],
-    "configuration": {
-      "title": "EduAI",
-      "properties": {
-        "eduai.apiProvider": {
-          "type": "string",
-          "enum": ["auto", "openai", "ollama", "gemini"],
-          "default": "gemini",
-          "description": "Which backend to use (auto chooses by model name)."
-        },
-        "eduai.endpoint": {
-          "type": "string",
-          "default": "https://api.openai.com/v1/chat/completions",
-          "description": "HTTP endpoint (OpenAI-compatible or your EduAI gateway)."
-        },
-        "eduai.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "OpenAI API key."
-        },
-        "eduai.ollamaUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:11434",
-          "description": "Ollama server URL."
-        },
-        "eduai.model": {
-          "type": "string",
-          "default": "gemini-2.0-flash",
-          "description": "Preferred model id."
-        },
-        "eduai.gemini.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Google AI Studio / Gemini API key."
-        },
-        "eduai.gemini.model": {
-          "type": "string",
-          "default": "gemini-2.0-flash",
-          "description": "Gemini model id (e.g., gemini-1.5-pro, gemini-1.5-flash)."
-        },
-        "eduai.defaultModel": {
-          "type": "string",
-          "default": "gemini-1.5-pro",
-          "description": "Fallback model id for legacy code paths."
-        },
-        "eduai.temperature": {
-          "type": "number",
-          "default": 0.2,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Default creativity/temperature."
-        },
-        "eduai.includeSelectionByDefault": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-attach current editor selection when opening chat."
-        }
-      }
+  "configuration": {
+  "title": "VibeLearner",
+  "properties": {
+    "vibelearner.backendMode": {
+      "type": "string",
+      "default": "direct",
+      "enum": ["direct", "vibelearner"],
+      "enumDescriptions": [
+        "Use Gemini directly from VS Code (default).",
+        "Use the VibeLearner (EduAI) backend /api/chat (good for demos and local models)."
+      ],
+      "description": "Which backend to use for AI calls."
+    },
+
+
+    "vibelearner.apiUrl": {
+      "type": "string",
+      "default": "https://vibelearner.example.edu/api/chat",
+      "description": "HTTP endpoint for the VibeLearner (EduAI) chat API (POST /api/chat). Used when backendMode = 'vibelearner'."
+    },
+    "vibelearner.apiKey": {
+      "type": "string",
+      "default": "",
+      "description": "VibeLearner (EduAI) API key used in the x-api-key header. Used when backendMode = 'vibelearner'."
+    },
+    "vibelearner.courseCode": {
+      "type": "string",
+      "default": "",
+      "description": "Optional course code sent with VibeLearner requests (e.g. COSC 123)."
+    },
+    "vibelearner.model": {
+      "type": "string",
+      "default": "google:gemini-2.5-flash",
+      "description": "Model identifier understood by the VibeLearner backend (e.g. google:gemini-2.5-flash, ollama:gpt-oss:120b)."
+    },
+
+
+    "vibelearner.geminiApiKey": {
+      "type": "string",
+      "default": "",
+      "description": "Google Gemini API key used when backendMode = 'direct'."
+    },
+    "vibelearner.geminiModel": {
+      "type": "string",
+      "default": "gemini-2.0-flash",
+      "description": "Gemini model name for direct calls (e.g. gemini-2.0-flash). Used when backendMode = 'direct'."
+    },
+
+
+    "vibelearner.includeSelectionByDefault": {
+      "type": "boolean",
+      "default": true,
+      "description": "Auto-attach current editor selection when opening chat."
     }
-    
-  },
-
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile",
-    "test": "echo \"no tests yet\""
-  },
-
-  "devDependencies": {
-    "@types/node": "^18.19.0",
-    "@types/vscode": "^1.89.0",
-    "esbuild": "^0.23.0",
-    "typescript": "^5.6.2"
   }
 }
+}
+}
+

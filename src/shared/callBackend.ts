@@ -1,8 +1,8 @@
 // src/shared/callBackend.ts
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
 type CallArgs = {
-  model: string;
+  model: string;   // used as a hint; we override from settings where needed
   prompt: string;
   system?: string;
 };
@@ -10,168 +10,199 @@ type CallArgs = {
 type CallResult = {
   text: string;
   usage?: { totalTokens?: number };
-  provider: 'ollama' | 'openai' | 'gemini';
+  provider: "vibelearner" | "gemini";
 };
 
+/**
+ * Single entry point for all LLM calls.
+ *
+ * Mode is controlled by `vibelearner.backendMode`:
+ *   - "direct"      → call Gemini API directly
+ *   - "vibelearner" → call the VibeLearner (EduAI) backend /api/chat
+ */
 export async function callBackend(args: CallArgs): Promise<CallResult> {
-  const cfg = vscode.workspace.getConfiguration('eduai');
+  const cfg = vscode.workspace.getConfiguration("vibelearner");
+  const mode = (cfg.get<string>("backendMode") ?? "direct").toLowerCase();
 
-  // Force Gemini as default if not explicitly set
-  const apiProvider = String(cfg.get('apiProvider') ?? 'gemini').toLowerCase();
-
-  // Prefer an explicit model, else eduai.model, else eduai.gemini.model, else Gemini default
-  const model =
-    args.model ||
-    String(cfg.get('model') ?? cfg.get('gemini.model') ?? 'gemini-2.0-flash');
-
-  const shouldUseGemini =
-    apiProvider === 'gemini' ||
-    (apiProvider === 'auto' && model.toLowerCase().startsWith('gemini'));
-
-  if (shouldUseGemini) {
-    const geminiApiKey =
-      (cfg.get<string>('gemini.apiKey') ?? cfg.get<string>('eduai.gemini.apiKey') ?? '') ||
-      process.env.GEMINI_API_KEY ||
-      '';
-
-    const geminiModel =
-      model || (cfg.get<string>('gemini.model') ?? 'gemini-2.0-flash');
-
-    if (!geminiApiKey) {
-      throw new Error(
-        "Gemini API key missing. Set 'eduai.gemini.apiKey' in Settings or GEMINI_API_KEY in env."
-      );
-    }
-
-    const text = await callGemini({
-      apiKey: geminiApiKey,
-      model: geminiModel,
-      userText: args.prompt,
-      systemText: args.system,
-      temperature: cfg.get<number>('temperature') ?? 0.2,
-    });
-
-    return { text, usage: approxUsage(text, args.prompt), provider: 'gemini' };
+  if (mode === "vibelearner") {
+    return callVibeLearnerBackend(args, cfg);
   }
 
-  // --- Fallback path: OpenAI/Ollama-compatible endpoint (kept for backwards compat) ---
+  // Default: direct Gemini
+  return callGeminiDirect(args, cfg);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                             VibeLearner backend                             */
+/* -------------------------------------------------------------------------- */
+
+async function callVibeLearnerBackend(
+  args: CallArgs,
+  cfg: vscode.WorkspaceConfiguration
+): Promise<CallResult> {
   const endpoint =
-    (cfg.get('endpoint') as string) ||
-    'http://127.0.0.1:11434/api/generate';
+    (cfg.get<string>("apiUrl") ?? "").trim() ||
+    "https://vibelearner.example.edu/api/chat"; // change to your real URL
 
-  const isChat = /\/api\/chat(?:\/?$)/.test(endpoint);
+  const apiKey = (cfg.get<string>("apiKey") ?? "").trim();
+  const courseCode = (cfg.get<string>("courseCode") ?? "").trim();
+  const modelFromConfig = (cfg.get<string>("model") ?? "").trim();
 
-  const body = isChat
-    ? {
-        model,
-        messages: [
-          args.system ? { role: 'system', content: args.system } : undefined,
-          { role: 'user', content: args.prompt },
-        ].filter(Boolean),
-        stream: false,
-      }
-    : {
-        model,
-        prompt: (args.system ? `System: ${args.system}\n\n` : '') + `User: ${args.prompt}`,
-        stream: false,
-      };
+  const model = modelFromConfig || args.model || "google:gemini-2.5-flash";
+
+  if (!endpoint) {
+    throw new Error(
+      "VibeLearner backend endpoint is missing. Set 'vibelearner.apiUrl' in Settings."
+    );
+  }
+
+  if (!apiKey) {
+    throw new Error(
+      "VibeLearner backend API key is missing. Set 'vibelearner.apiKey' in Settings."
+    );
+  }
+
+  const messages: any[] = [];
+  if (args.system) {
+    messages.push({ role: "system", content: args.system });
+  }
+  messages.push({ role: "user", content: args.prompt });
+
+  const body: any = {
+    messages,
+    model,
+    courseCode: courseCode || undefined,
+    streaming: false,
+    // The EduAI/VibeLearner server decides which local models/providers to use.
+    apiKeys: {}
+  };
 
   const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let extra = "";
+    try {
+      extra = await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `VibeLearner backend error ${res.status} ${res.statusText}` +
+        (extra ? ` — ${extra}` : "")
+    );
+  }
+
+  let data: any = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  const text =
+    data.answer ??
+    data.content ??
+    data.message?.content ??
+    data.choices?.[0]?.message?.content ??
+    data.choices?.[0]?.text ??
+    "";
+
+  const textString = String(text || "");
+
+  return {
+    text: textString,
+    usage: approxUsage(textString, args.prompt),
+    provider: "vibelearner",
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                         Direct Gemini (default mode)                        */
+/* -------------------------------------------------------------------------- */
+
+async function callGeminiDirect(
+  args: CallArgs,
+  cfg: vscode.WorkspaceConfiguration
+): Promise<CallResult> {
+  const apiKey = (cfg.get<string>("geminiApiKey") ?? "").trim();
+  const modelFromConfig = (cfg.get<string>("geminiModel") ?? "").trim();
+
+  const model = modelFromConfig || args.model || "gemini-2.0-flash";
+
+  if (!apiKey) {
+    throw new Error(
+      "Gemini API key is missing. Set 'vibelearner.geminiApiKey' in Settings or switch backendMode to 'vibelearner'."
+    );
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  // Simple prompt packing: prepend system text if present
+  let userText = args.prompt;
+  if (args.system && args.system.trim().length > 0) {
+    userText = `[System]\n${args.system}\n\n[User]\n${args.prompt}`;
+  }
+
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: userText }],
+      },
+    ],
+  };
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    let extra = "";
+    try {
+      extra = await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Gemini error ${res.status} ${res.statusText}` +
+        (extra ? ` — ${extra}` : "")
+    );
+  }
 
   const data: any = await res.json();
-  const text = isChat ? data?.message?.content || '' : data?.response || '';
-  return { text, usage: approxUsage(text, args.prompt), provider: 'ollama' };
+
+  const parts: string[] =
+    data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "") ?? [];
+  const text = parts.join("");
+
+  const textString = String(text || "");
+
+  return {
+    text: textString,
+    usage: approxUsage(textString, args.prompt),
+    provider: "gemini",
+  };
 }
+
+/* -------------------------------------------------------------------------- */
 
 function approxUsage(output: string, input: string) {
   const total = Math.round((input.length + output.length) / 4);
   return { totalTokens: total };
 }
 
-// --- Gemini REST call with smart fallbacks (supports 2.0 + 1.5; v1beta & v1) ---
-async function callGemini(params: {
-  apiKey: string;
-  model: string;
-  userText: string;
-  systemText?: string;
-  temperature?: number;
-}): Promise<string> {
-  const { apiKey, model, userText, systemText, temperature = 0.2 } = params;
-
-  // Pick a family based on input; try safe aliases
-  const base = (model || '').trim().toLowerCase();
-
-  const families: Record<string, string[]> = {
-    'gemini-2.0-flash': [
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-exp',
-      'gemini-2.0-flash-lite'
-    ],
-    'gemini-1.5-pro': [
-      'gemini-1.5-pro',
-      'gemini-1.5-pro-latest',
-      'gemini-1.5-pro-002'
-    ],
-    'gemini-1.5-flash': [
-      'gemini-1.5-flash',
-      'gemini-1.5-flash-latest',
-      'gemini-1.5-flash-002'
-    ]
-  };
-
-  let familyKey: keyof typeof families = 'gemini-1.5-flash';
-  if (base.startsWith('gemini-2.0-flash')) familyKey = 'gemini-2.0-flash';
-  else if (base.startsWith('gemini-1.5-pro')) familyKey = 'gemini-1.5-pro';
-  else if (base.startsWith('gemini-1.5-flash')) familyKey = 'gemini-1.5-flash';
-
-  const modelsToTry = Array.from(new Set([model, ...(families[familyKey] || [])]))
-    .filter(Boolean) as string[];
-
-  const apiVersions = ['v1beta', 'v1']; // try both
-
-  const body: any = {
-    contents: [{ role: 'user', parts: [{ text: params.userText }] }],
-    generationConfig: { temperature }
-  };
-  if (systemText) body.systemInstruction = { role: 'system', parts: [{ text: systemText }] };
-
-  let lastError = '';
-  for (const ver of apiVersions) {
-    for (const m of modelsToTry) {
-      const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(m)}:generateContent`;
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (resp.ok) {
-        const json: any = await resp.json();
-        const text =
-          json?.candidates?.[0]?.content?.parts
-            ?.map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
-            .join('') ?? '';
-        return text;
-      }
-
-      const errText = await resp.text();
-      lastError = `Gemini ${resp.status} ${resp.statusText} (${ver}, ${m}): ${errText}`;
-      // keep trying next alias/version
-    }
-  }
-  throw new Error(lastError || 'Gemini request failed.');
-}
-
-
-
-// `fetch` is provided by VS Code web runtime in Node >=18; declare for TS.
+// VS Code runs on Node >= 18 which has global fetch. We declare for TS.
 declare const fetch: any;
