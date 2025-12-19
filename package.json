@@ -96,7 +96,7 @@
         },
         "vibelearner.gemini.apiKey": {
           "type": "string",
-          "default": "AIzaSyDQxcP4OYKkZMcaIimOU6v7BKEuXT9schQ",
+          "default": "",
           "description": "Google AI Studio / Gemini API key."
         },
         "vibelearner.gemini.model": {

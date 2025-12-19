@@ -105,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const model =
         cfg.get<string>('model') ||
         cfg.get<string>('gemini.model') ||
-        'gemini-2.0-pro';
+        'gemini-2.0-flash-lite';
 
       const assist = meta.assist || 'Socratic';
       const objectives = Array.isArray(meta.objectives) ? meta.objectives.slice(0, 6) : [];

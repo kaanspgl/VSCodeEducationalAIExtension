@@ -114,10 +114,9 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
 
   if (shouldUseGemini) {
     const geminiApiKey =
-      (cfg.get<string>('gemini.apiKey') ??
-        cfg.get<string>('vibelearner.gemini.apiKey') ??
-        '') ||
-      process.env.GEMINI_API_KEY ||
+      process.env.GEMINI_API_KEY || // Priority 1: Environment variable
+      cfg.get<string>('gemini.apiKey') || // Priority 2: Extension specific setting
+      cfg.get<string>('eduai.gemini.apiKey') || // Priority 3: Legacy setting
       '';
 
     const geminiModel =
@@ -197,7 +196,6 @@ function approxUsage(output: string, input: string) {
   return { totalTokens: total };
 }
 
-// --- Gemini REST call (simple v1beta generateContent) ---
 async function callGemini(params: {
   apiKey: string;
   model: string;
@@ -207,45 +205,60 @@ async function callGemini(params: {
 }): Promise<string> {
   const { apiKey, model, userText, systemText, temperature = 0.2 } = params;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    model
-  )}:generateContent`;
-
-  const body: any = {
+  // 1. Try v1beta first (supports the dedicated systemInstruction field)
+  const v1betaUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  
+  const v1betaBody: any = {
     contents: [{ role: 'user', parts: [{ text: userText }] }],
     generationConfig: { temperature },
   };
 
   if (systemText) {
-    body.systemInstruction = {
+    v1betaBody.systemInstruction = {
       role: 'system',
       parts: [{ text: systemText }],
     };
   }
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify(body),
-  });
+  try {
+    const resp = await fetch(v1betaUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(v1betaBody),
+    });
 
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(
-      `Gemini ${resp.status} ${resp.statusText}: ${errText || 'request failed'}`
-    );
+    if (resp.ok) {
+      const json: any = await resp.json();
+      return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    }
+
+    // 2. Fallback to v1 ONLY if v1beta fails
+    const v1Url = v1betaUrl.replace('v1beta', 'v1');
+    const v1Body = {
+      contents: [{ 
+        role: 'user', 
+        parts: [{ text: systemText ? `${systemText}\n\n${userText}` : userText }] 
+      }],
+      generationConfig: { temperature },
+      // Note: No systemInstruction field exists in this object
+    };
+
+    const v1Resp = await fetch(v1Url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(v1Body),
+    });
+
+    if (v1Resp.ok) {
+      const v1Json: any = await v1Resp.json();
+      return v1Json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    }
+    
+    const errText = await v1Resp.text();
+    throw new Error(`Gemini Fallback Error: ${v1Resp.status} ${errText}`);
+  } catch (err: any) {
+    throw new Error(`Chat failed: ${err.message}`);
   }
-
-  const json: any = await resp.json();
-  const text =
-    json?.candidates?.[0]?.content?.parts
-      ?.map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
-      .join('') ?? '';
-
-  return text;
 }
 
 // `fetch` is provided by VS Code web runtime in Node >=18; declare for TS.
