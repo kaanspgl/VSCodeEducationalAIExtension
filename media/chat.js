@@ -2,7 +2,7 @@
   let vscode;
   try { vscode = acquireVsCodeApi(); } catch (e) { return; }
 
-  const boot = (window.__EDUAI_BOOT__ || { model: 'qwen3-coder:30b' });
+  const boot = (window.__VIBELEARNER_BOOT__ || { model: 'qwen3-coder:30b' });
 
   // ---------- State ----------
   let messages = [];
@@ -29,7 +29,7 @@
     if (toastEl) return toastEl;
     toastEl = document.createElement('div');
     toastEl.className = 'toast';
-    toastEl.id = 'eduaiToast';
+    toastEl.id = 'vibelearnerToast';
     document.body.appendChild(toastEl);
     return toastEl;
   }
@@ -40,7 +40,6 @@
     setTimeout(()=> el.classList.remove('show'), ms);
   }
 
-  // ---------- Host → Webview ----------
   window.addEventListener('message', (event) => {
     const { type, payload } = event.data || {};
 
@@ -50,7 +49,7 @@
       setStatus('Idle');
     }
 
-    // Background-only; we don’t prefill the chat anymore.
+    // Background-only
     else if (type === 'activeContext') { /* ignore */ }
     else if (type === 'presetPrompt')  { /* ignore */ }
 
@@ -59,7 +58,7 @@
       const result = payload?.result || {};
       if (!scope) return;
 
-      // If we asked to DETACH, we already removed; ignore any stray returns.
+      // Ignore any stray returns.
       if (attached[scope] && result && result.__detaching) return;
 
       // Save and mark UI
@@ -118,7 +117,7 @@
     });
   });
 
-  // Quick actions send immediately (no user bubble)
+  // Quick actions
   document.querySelectorAll('.qa-toolbar .qa')?.forEach(btn => {
     btn.addEventListener('click', () => {
       if (busy) return;

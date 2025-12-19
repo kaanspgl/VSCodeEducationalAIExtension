@@ -6,21 +6,21 @@ import { callBackend } from './shared/callBackend';
 export async function activate(context: vscode.ExtensionContext) {
   // Show the chat panel
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.showChat', () => {
+    vscode.commands.registerCommand('vibelearner.showChat', () => {
       ChatPanel.createOrShow(context.extensionUri);
     })
   );
 
   // Open chat (no selection required)
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.openChat', () => {
+    vscode.commands.registerCommand('vibelearner.openChat', () => {
       ChatPanel.createOrShow(context.extensionUri);
     })
   );
 
   // Ask about current selection: opens panel, injects selection, presets prompt
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.askSelection', async () => {
+    vscode.commands.registerCommand('vibelearner.askSelection', async () => {
       const ed = vscode.window.activeTextEditor;
       if (!ed) {
         vscode.window.showInformationMessage('No active editor.');
@@ -60,7 +60,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Ask about a file from Explorer context menu
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.askFile', async (resourceUri?: vscode.Uri) => {
+    vscode.commands.registerCommand('vibelearner.askFile', async (resourceUri?: vscode.Uri) => {
       try {
         const uri = resourceUri ?? vscode.window.activeTextEditor?.document.uri;
         if (!uri) {
@@ -90,17 +90,17 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         });
       } catch (err: any) {
-        vscode.window.showErrorMessage(`EduAI: Failed to load file — ${err?.message || err}`);
+        vscode.window.showErrorMessage(`VibeLearner: Failed to load file — ${err?.message || err}`);
       }
     })
   );
 
   // === Backend: learning-first chat ===
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.chat', async (payload: any) => {
+    vscode.commands.registerCommand('vibelearner.backend.chat', async (payload: any) => {
       const text = payload?.text ?? payload;
       const meta = payload?.meta ?? {};
-      const cfg = vscode.workspace.getConfiguration('eduai');
+      const cfg = vscode.workspace.getConfiguration('vibelearner');
 
       const model =
         cfg.get<string>('model') ||
@@ -145,7 +145,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Context providers used by the webview
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.getContext', async ({ scope }) => {
+    vscode.commands.registerCommand('vibelearner.backend.getContext', async ({ scope }) => {
       if (scope === 'activeFile') {
         const ed = vscode.window.activeTextEditor;
         if (!ed) return { error: 'No active editor' };
@@ -195,7 +195,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Insert code into editor
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.insertCode', async ({ code, where }) => {
+    vscode.commands.registerCommand('vibelearner.backend.insertCode', async ({ code, where }) => {
       const ed =
         vscode.window.activeTextEditor ||
         (await vscode.window.showTextDocument(
@@ -213,8 +213,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Save / export threads
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.saveThread', async ({ title, messages }) => {
-      const name = (title?.trim() || 'eduai-thread') + '.json';
+    vscode.commands.registerCommand('vibelearner.backend.saveThread', async ({ title, messages }) => {
+      const name = (title?.trim() || 'vibelearner-thread') + '.json';
       const uri = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.file(name),
         filters: { JSON: ['json'] },
@@ -228,7 +228,7 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.exportThread', async ({ format, messages }) => {
+    vscode.commands.registerCommand('vibelearner.backend.exportThread', async ({ format, messages }) => {
       const md =
         format === 'md'
           ? messages
@@ -241,12 +241,39 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Feedback hook (placeholder)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.backend.feedback', async ({ messageId, value }) => {
-      console.log('feedback', messageId, value);
-    })
-  );
+  // === Backend: Feedback logging for research data ===
+context.subscriptions.push(
+  vscode.commands.registerCommand('vibelearner.backend.feedback', async (payload: any) => {
+    try {
+      // 1. Create a structured log entry
+      const logEntry = {
+        timestamp: new Date().toISOString(),
+        assistMode: payload.meta?.assist || 'unknown',
+        model: payload.meta?.model || 'unknown',
+        userPrompt: payload.lastPrompt || 'N/A',
+        aiResponse: payload.lastResponse || 'N/A',
+        userRating: payload.value, // This is the 'Like/Dislike' or score
+      };
+
+      // 2. Define the path (saves to your extension's private folder)
+      const storageUri = context.globalStorageUri;
+      await vscode.workspace.fs.createDirectory(storageUri); // Ensure folder exists
+      const logFileUri = vscode.Uri.joinPath(storageUri, 'research_data_log.jsonl');
+
+      // 3. Append the new data to the file
+      const encoded = new TextEncoder().encode(JSON.stringify(logEntry) + '\n');
+      const existingData = await vscode.workspace.fs.readFile(logFileUri).then(data => data, () => new Uint8Array());
+      
+      const combined = new Uint8Array(existingData.length + encoded.length);
+      combined.set(existingData);
+      combined.set(encoded, existingData.length);
+
+      await vscode.workspace.fs.writeFile(logFileUri, combined);
+    } catch (err) {
+      console.error('Failed to log research data:', err);
+    }
+  })
+);
 
   // === Quick Action commands -> tell the webview to activate that action ===
   const quick = (action: string) => {
@@ -257,12 +284,12 @@ export async function activate(context: vscode.ExtensionContext) {
   };
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('eduai.quick.explain', () => quick('explain')),
-    vscode.commands.registerCommand('eduai.quick.review',  () => quick('review')),
-    vscode.commands.registerCommand('eduai.quick.plan',    () => quick('plan')),
-    vscode.commands.registerCommand('eduai.quick.hints',   () => quick('hints')),
-    vscode.commands.registerCommand('eduai.quick.reflect', () => quick('reflect')),
-    vscode.commands.registerCommand('eduai.quick.quiz',    () => quick('quiz')),
+    vscode.commands.registerCommand('vibelearner.quick.explain', () => quick('explain')),
+    vscode.commands.registerCommand('vibelearner.quick.review',  () => quick('review')),
+    vscode.commands.registerCommand('vibelearner.quick.plan',    () => quick('plan')),
+    vscode.commands.registerCommand('vibelearner.quick.hints',   () => quick('hints')),
+    vscode.commands.registerCommand('vibelearner.quick.reflect', () => quick('reflect')),
+    vscode.commands.registerCommand('vibelearner.quick.quiz',    () => quick('quiz')),
   );
 }
 
@@ -291,7 +318,7 @@ function buildSystemPrompt(assist: string, mode: string) {
 
   // Teaching modes (friendly, cohesive, low-clutter responses)
   const base = [
-    'You are a course-aware coding tutor.',
+    'You are VibeLearner, a course-aware coding tutor.',
     'Use a warm, concise, conversational tone.',
     'Write as a single cohesive explanation (no section headers).',
     'Begin with one focused guiding question, then explain the strategy simply.',
@@ -347,7 +374,11 @@ function buildLearningPrompt({
     parts.push(`Recent Chat (most recent first, truncated):\n${lines}`);
   }
 
-  if (ctx.activeFile?.content) parts.push(`Active File (truncated):\n${ctx.activeFile.content.slice(0, 6000)}`);
+  if (ctx.activeFile?.content) {
+    const skeleton = getFileSkeleton(ctx.activeFile.content);
+    // We send the "Skeleton" of the whole file AND the first 4000 chars for detail
+    parts.push(`File Structure Overview:\n${skeleton}\n\nFile Content (truncated):\n${ctx.activeFile.content.slice(0, 4000)}`);
+  }
   if (ctx.selection?.content) parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
   if (ctx.problems?.items?.length) parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
   if (ctx.tests) parts.push(`Tests: ${JSON.stringify(ctx.tests)}`);
@@ -394,4 +425,25 @@ function toBase64(s: string) {
   for (const b of bytes) binary += String.fromCharCode(b);
   // @ts-ignore
   return btoa(binary);
+}
+
+/**
+ * Trims a file down to its 'skeleton' (headers/imports) 
+ * so the AI understands the overall structure without hitting token limits.
+ */
+function getFileSkeleton(content: string): string {
+  const lines = content.split('\n');
+  return lines
+    .filter(line => {
+      const trimmed = line.trim();
+      return (
+        trimmed.startsWith('import ') || 
+        trimmed.startsWith('export ') || 
+        trimmed.includes('class ') || 
+        trimmed.includes('function ') ||
+        trimmed.includes('interface ') ||
+        (trimmed.startsWith('public ') && trimmed.includes('('))
+      );
+    })
+    .join('\n');
 }

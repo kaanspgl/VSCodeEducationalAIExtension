@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 export class ChatPanel {
-  public static readonly viewType = 'eduai.chatPanel';
+  public static readonly viewType = 'vibelearner.chatPanel';
   public static currentPanel: ChatPanel | undefined;
 
   private readonly panel: vscode.WebviewPanel;
@@ -21,7 +21,7 @@ export class ChatPanel {
     }
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
-      'EduAI — Tutor',
+      'VibeLearner — Tutor',
       column,
       {
         enableScripts: true,
@@ -48,7 +48,7 @@ export class ChatPanel {
         case 'ask': {
           try {
             const res = await vscode.commands.executeCommand<{ text?: string; usage?: any; meta?: any }>(
-              'eduai.backend.chat',
+              'vibelearner.backend.chat',
               { text: msg.payload?.text ?? msg.payload, meta: msg.payload?.meta ?? msg.meta }
             );
             this.panel.webview.postMessage({ type: 'answer', payload: res?.text ?? String(res) });
@@ -59,8 +59,8 @@ export class ChatPanel {
           break;
         }
         case 'requestActiveContext': {
-          const result = await vscode.commands.executeCommand('eduai.backend.getContext', { scope: 'activeFile' });
-          const selection = await vscode.commands.executeCommand('eduai.backend.getContext', { scope: 'selection' });
+          const result = await vscode.commands.executeCommand('vibelearner.backend.getContext', { scope: 'activeFile' });
+          const selection = await vscode.commands.executeCommand('vibelearner.backend.getContext', { scope: 'selection' });
           const payload = {
             language: (result as any)?.language,
             filename: (result as any)?.uri,
@@ -71,25 +71,25 @@ export class ChatPanel {
           break;
         }
         case 'ctx:request': {
-          const result = await vscode.commands.executeCommand('eduai.backend.getContext', { scope: msg.payload?.scope });
+          const result = await vscode.commands.executeCommand('vibelearner.backend.getContext', { scope: msg.payload?.scope });
           this.panel.webview.postMessage({ type: 'ctx:result', payload: { scope: msg.payload?.scope, result } });
           break;
         }
         case 'editor:insert': {
-          await vscode.commands.executeCommand('eduai.backend.insertCode', msg.payload);
+          await vscode.commands.executeCommand('vibelearner.backend.insertCode', msg.payload);
           break;
         }
         case 'thread:save': {
-          await vscode.commands.executeCommand('eduai.backend.saveThread', msg.payload);
+          await vscode.commands.executeCommand('vibelearner.backend.saveThread', msg.payload);
           break;
         }
         case 'thread:export': {
-          const href = await vscode.commands.executeCommand('eduai.backend.exportThread', msg.payload);
+          const href = await vscode.commands.executeCommand('vibelearner.backend.exportThread', msg.payload);
           this.panel.webview.postMessage({ type: 'thread:exported', payload: { href } });
           break;
         }
         case 'feedback': {
-          await vscode.commands.executeCommand('eduai.backend.feedback', msg.payload);
+          await vscode.commands.executeCommand('vibelearner.backend.feedback', msg.payload);
           break;
         }
       }
@@ -108,7 +108,7 @@ export class ChatPanel {
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.css'));
     const jsUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js'));
 
-    const cfg = vscode.workspace.getConfiguration('eduai');
+    const cfg = vscode.workspace.getConfiguration('vibelearner');
     const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen3-coder:30b';
 
     const bootJson = JSON.stringify({ model })
@@ -130,12 +130,12 @@ export class ChatPanel {
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="${cssUri}">
-  <title>EduAI — Tutor</title>
+  <title>VibeLearner — Tutor</title>
 </head>
 <body>
   <!-- Top bar -->
   <header class="topbar">
-    <div class="brand"><span class="dot"></span>EduAI</div>
+    <div class="brand"><span class="dot"></span>VibeLearner</div>
 
     <!-- Assist dropdown with inline explanations -->
     <details class="assist" id="assistDetails">
@@ -250,10 +250,10 @@ export class ChatPanel {
   </main>
 
   <script nonce="${nonce}">
-    window.__EDUAI_BOOT__ = ${bootJson};
+    window.__VIBELEARNER_BOOT__ = ${bootJson};
     (function initBoot(){
       try{
-        var boot = window.__EDUAI_BOOT__ || {};
+        var boot = window.__VIBELEARNER_BOOT__ || {};
         var modelSel = document.getElementById('model');
         if (modelSel && boot.model) {
           var opt = document.createElement('option');

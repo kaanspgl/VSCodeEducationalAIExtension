@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run EduAI Extension",
+      "name": "Run VibeLearner Extension",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
@@ -11,7 +11,7 @@
       "preLaunchTask": "npm: compile"
     },
     {
-      "name": "Run EduAI Extension (Watch)",
+      "name": "Run VibeLearner Extension (Watch)",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
