@@ -1,4 +1,3 @@
-// src/shared/callBackend.ts
 import * as vscode from 'vscode';
 
 type CallArgs = {
@@ -10,11 +9,11 @@ type CallArgs = {
 type CallResult = {
   text: string;
   usage?: { totalTokens?: number };
-  provider: 'ollama' | 'openai' | 'gemini' | 'vibelearner';
+  provider: 'ollama' | 'openai' | 'gemini' | 'eduai';
 };
 
 export async function callBackend(args: CallArgs): Promise<CallResult> {
-  const cfg = vscode.workspace.getConfiguration('vibelearner');
+  const cfg = vscode.workspace.getConfiguration('eduai');
 
   // Default to Gemini unless user explicitly selects otherwise.
   const apiProvider = String(cfg.get('apiProvider') ?? 'gemini').toLowerCase();
@@ -30,20 +29,20 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
     );
 
   // -------------------------------------------------------------
-  // 1) VibeLearner Backend (course-aware RAG via VibeLearner Core Learning)
+  // 1) EduAI Backend (course-aware RAG via VibeLearner Core Learning)
   // -------------------------------------------------------------
-  const shouldUseVibeLearner =
-    apiProvider === 'vibelearner' ||
-    (apiProvider === 'auto' && model.toLowerCase().startsWith('vibelearner'));
+  const shouldUseEduAI =
+    apiProvider === 'eduai' ||
+    (apiProvider === 'auto' && model.toLowerCase().startsWith('eduai'));
 
-  if (shouldUseVibeLearner) {
+  if (shouldUseEduAI) {
     const endpoint =
-      (cfg.get<string>('vibelearnerEndpoint') as string) ||
+      (cfg.get<string>('eduaiEndpoint') as string) ||
       (cfg.get<string>('endpoint') as string) ||
-      'https://vibelearner.ok.ubc.ca/api/chat';
+      'https://eduai.ok.ubc.ca/api/chat';
 
     const apiKey =
-      (cfg.get<string>('vibelearnerApiKey') as string) ||
+      (cfg.get<string>('eduaiApiKey') as string) ||
       (cfg.get<string>('openaiApiKey') as string) ||
       '';
 
@@ -52,13 +51,13 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
 
     if (!endpoint) {
       throw new Error(
-        "VibeLearner endpoint missing. Set 'vibelearner.vibelearnerEndpoint' in Settings."
+        "EduAI endpoint missing. Set 'eduai.eduaiEndpoint' in Settings."
       );
     }
 
     if (!apiKey) {
       throw new Error(
-        "VibeLearner API key missing. Set 'vibelearner.vibelearnerApiKey' in Settings."
+        "EduAI API key missing. Set 'vibelearner.eduaiApiKey' in Settings."
       );
     }
 
@@ -69,7 +68,7 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
       ].filter(Boolean),
       model,
       apiKeys: {
-        vibelearner: {
+        eduai: {
           isEnabled: true,
           apiKey,
         },
@@ -88,7 +87,7 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
     });
 
     if (!res.ok) {
-      throw new Error(`VibeLearner ${res.status} ${res.statusText}`);
+      throw new Error(`EduAI ${res.status} ${res.statusText}`);
     }
 
     const data: any = await res.json();
@@ -102,7 +101,7 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
     return {
       text,
       usage: approxUsage(text, args.prompt),
-      provider: 'vibelearner',
+      provider: 'eduai',
     };
   }
 

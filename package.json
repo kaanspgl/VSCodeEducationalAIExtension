@@ -69,7 +69,7 @@
             "openai",
             "ollama",
             "gemini",
-            "vibelearner"
+            "eduai"
           ],
           "default": "gemini",
           "description": "Which backend to use (auto chooses by model name)."
@@ -121,20 +121,20 @@
           "default": true,
           "description": "Auto-attach current editor selection when opening chat."
         },
-        "vibelearner.vibelearnerEndpoint": {
+        "vibelearner.eduaiEndpoint": {
           "type": "string",
-          "default": "https://vibelearner.ok.ubc.ca/api/chat",
-          "description": "VibeLearner chat endpoint (e.g. https://vibelearner.ok.ubc.ca/api/chat)."
+          "default": "https://eduai.ok.ubc.ca/api/chat",
+          "description": "EduAI chat endpoint (e.g. https://eduai.ok.ubc.ca/api/chat)."
         },
-        "vibelearner.vibelearnerApiKey": {
+        "vibelearner.eduaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "VibeLearner backend API key used for course-aware RAG."
+          "description": "EduAI backend API key used for course-aware RAG."
         },
         "vibelearner.courseCode": {
           "type": "string",
           "default": "DEMO101",
-          "description": "Default course code to send to VibeLearner for contextual RAG."
+          "description": "Default course code to send to EduAI for contextual RAG."
         }
       }
     }
