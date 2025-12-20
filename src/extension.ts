@@ -53,8 +53,56 @@ export async function activate(context: vscode.ExtensionContext) {
             autoSend: false
           }
         });
-      }, 200);
-    })
+        }, 200);
+      })
+    );
+  
+    // Track error counts per file to detect fixes
+    const errorState = new Map<string, number>();
+  
+    context.subscriptions.push(
+      vscode.languages.onDidChangeDiagnostics((e) => {
+        const ed = vscode.window.activeTextEditor;
+        if (!ed) return;
+
+        // Only check if the event affects the currently active file
+        const activeUriStr = ed.document.uri.toString();
+        if (e.uris.some(u => u.toString() === activeUriStr)) {
+          
+          // Count current errors (Red squigglies only)
+          const diags = vscode.languages.getDiagnostics(ed.document.uri);
+          const currentErrors = diags.filter(d => d.severity === vscode.DiagnosticSeverity.Error).length;
+          
+          // Get previous count (default to 0)
+          const prevErrors = errorState.get(activeUriStr) || 0;
+
+          if (prevErrors > 0 && currentErrors === 0) {
+            
+            // Trigger the reflection moment
+            // It waits 1.5 seconds so the user can breathe after fixing the bug
+            setTimeout(() => {
+              vscode.window.showInformationMessage(
+                "Nice fix! Time for a quick reflection?", 
+                "Quiz Me", "Later"
+              ).then(selection => {
+                if (selection === "Quiz Me") {
+                  ChatPanel.createOrShow(context.extensionUri);
+                  ChatPanel.postToWebview({
+                    type: 'presetPrompt',
+                    payload: {
+                      text: "I just fixed the errors in this file! Quiz me on why the fix worked and what concept I applied.",
+                      autoSend: true
+                    }
+                  });
+                }
+              });
+            }, 1500);
+          }
+
+          // Update state for next change
+          errorState.set(activeUriStr, currentErrors);
+        }
+      })
   );
 
   // Ask about a file from Explorer context menu
@@ -82,8 +130,8 @@ export async function activate(context: vscode.ExtensionContext) {
         ChatPanel.postToWebview({
           type: 'presetPrompt',
           payload: {
-            text: 'Give me a high-level explanation of this file, then suggest 2 improvements.',
-            autoSend: false
+            text: `I'm analyzing ${filename.split('/').pop()}. Don't explain it yet! First, ask me to guess what it does based on the imports and class names.`,
+            autoSend: true
           }
         });
       } catch (err: any) {
@@ -293,6 +341,7 @@ function buildSystemPrompt(assist: string, mode: string) {
     base.push(
       'Use at most ONE targeted question at a time. If the student seems stuck or asks for help, give a small hint.',
       'If they remain stuck, follow with a short 2–3 sentence explanation that unblocks them.',
+      'If the user asks for the answer directly, firmly but politely decline and instead offer a simpler sub-problem to solve first.',
       'Avoid interrogating every line; focus on the next actionable step.'
     );
   } else if (assist === 'Hinted') {
