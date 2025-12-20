@@ -71,13 +71,13 @@
             "gemini",
             "eduai"
           ],
-          "default": "gemini",
-          "description": "Which backend to use (auto chooses by model name)."
+          "default": "ollama",
+          "description": "Which backend to use. Defaults to local Ollama."
         },
         "vibelearner.endpoint": {
           "type": "string",
-          "default": "https://api.openai.com/v1/chat/completions",
-          "description": "HTTP endpoint (OpenAI-compatible or your VibeLearner gateway)."
+          "default": "http://127.0.0.1:11434/api/chat",
+          "description": "HTTP endpoint. For Ollama use: http://127.0.0.1:11434/api/chat"
         },
         "vibelearner.openaiApiKey": {
           "type": "string",
@@ -91,7 +91,7 @@
         },
         "vibelearner.model": {
           "type": "string",
-          "default": "gemini-2.0-flash",
+          "default": "qwen3-coder:30b",
           "description": "Preferred model id."
         },
         "vibelearner.gemini.apiKey": {
@@ -101,13 +101,13 @@
         },
         "vibelearner.gemini.model": {
           "type": "string",
-          "default": "gemini-2.0-flash",
-          "description": "Gemini model id (e.g., gemini-1.5-pro, gemini-1.5-flash)."
+          "default": "gemini-2.0-flash-lite-preview-02-05",
+          "description": "Gemini model id."
         },
         "vibelearner.defaultModel": {
           "type": "string",
-          "default": "gemini-1.5-pro",
-          "description": "Fallback model id for legacy code paths."
+          "default": "qwen3-coder:30b",
+          "description": "Fallback model id."
         },
         "vibelearner.temperature": {
           "type": "number",

@@ -4,6 +4,7 @@ type CallArgs = {
   model: string;
   prompt: string;
   system?: string;
+  context: vscode.ExtensionContext;
 };
 
 type CallResult = {
@@ -13,182 +14,120 @@ type CallResult = {
 };
 
 export async function callBackend(args: CallArgs): Promise<CallResult> {
-  const cfg = vscode.workspace.getConfiguration('eduai');
+  const cfg = vscode.workspace.getConfiguration('vibelearner');
 
-  // Default to Gemini unless user explicitly selects otherwise.
-  const apiProvider = String(cfg.get('apiProvider') ?? 'gemini').toLowerCase();
+  // 1. Determine Provider
+  // Priority: Args -> Config -> Default (ollama)
+  let apiProvider = String(cfg.get('apiProvider') ?? 'ollama').toLowerCase();
+  
+  // 2. Determine Model
+  const model = args.model || String(cfg.get('model') ?? 'qwen3-coder:30b');
 
-  // Prefer an explicit model, else vibelearner.model, else vibelearner.gemini.model, else Gemini default.
-  const model =
-    args.model ||
-    String(
-      cfg.get('model') ??
-        cfg.get('gemini.model') ??
-        cfg.get('defaultModel') ??
-        'gemini-2.0-flash'
-    );
+  // Auto-detection logic: If "auto", guess provider from model name
+  if (apiProvider === 'auto') {
+    if (model.startsWith('gemini')) apiProvider = 'gemini';
+    else if (model.startsWith('eduai')) apiProvider = 'eduai';
+    else apiProvider = 'ollama'; // Default to ollama for qwen, llama, etc.
+  }
+
+  console.log(`[VibeLearner] Routing: Provider=${apiProvider}, Model=${model}`);
 
   // -------------------------------------------------------------
-  // 1) EduAI Backend (course-aware RAG via VibeLearner Core Learning)
+  // ROUTE 1: EduAI
   // -------------------------------------------------------------
-  const shouldUseEduAI =
-    apiProvider === 'eduai' ||
-    (apiProvider === 'auto' && model.toLowerCase().startsWith('eduai'));
-
-  if (shouldUseEduAI) {
-    const endpoint =
-      (cfg.get<string>('eduaiEndpoint') as string) ||
-      (cfg.get<string>('endpoint') as string) ||
-      'https://eduai.ok.ubc.ca/api/chat';
-
-    const apiKey =
-      (cfg.get<string>('eduaiApiKey') as string) ||
-      (cfg.get<string>('openaiApiKey') as string) ||
-      '';
-
-    const courseCode =
-      (cfg.get<string>('courseCode') as string) || 'DEMO101';
-
-    if (!endpoint) {
-      throw new Error(
-        "EduAI endpoint missing. Set 'eduai.eduaiEndpoint' in Settings."
-      );
-    }
-
-    if (!apiKey) {
-      throw new Error(
-        "EduAI API key missing. Set 'vibelearner.eduaiApiKey' in Settings."
-      );
-    }
-
-    const body: any = {
-      messages: [
-        args.system ? { role: 'system', content: args.system } : undefined,
-        { role: 'user', content: args.prompt },
-      ].filter(Boolean),
-      model,
-      apiKeys: {
-        eduai: {
-          isEnabled: true,
-          apiKey,
-        },
-      },
-      courseCode,
-      streaming: false,
-    };
+  if (apiProvider === 'eduai') {
+    const endpoint = (cfg.get<string>('eduaiEndpoint') as string) || 'https://eduai.ok.ubc.ca/api/chat';
+    const apiKey = cfg.get<string>('eduaiApiKey') || '';
+    if (!apiKey) throw new Error("EduAI API key missing.");
 
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: args.prompt }],
+        model,
+        courseCode: 'DEMO101'
+      }),
+    });
+    if (!res.ok) throw new Error(`EduAI Error: ${res.status}`);
+    const data: any = await res.json();
+    return { text: data?.response || '', provider: 'eduai' };
+  }
+
+  // -------------------------------------------------------------
+  // ROUTE 2: Gemini
+  // -------------------------------------------------------------
+  if (apiProvider === 'gemini') {
+    const geminiApiKey =
+      process.env.GEMINI_API_KEY ||
+      (await args.context.secrets.get('gemini_api_key')) ||
+      (cfg.get<string>('gemini.apiKey')) || '';
+
+    if (!geminiApiKey) throw new Error("Gemini API key missing.");
+    
+    // Using v1beta for modern models
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const body: any = {
+        contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
+        generationConfig: { temperature: 0.2 }
+    };
+    if(args.system) body.systemInstruction = { role: 'system', parts: [{ text: args.system }] };
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
+        body: JSON.stringify(body)
+    });
+    
+    if(!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Gemini Error (${res.status}): ${txt}`);
+    }
+    const json: any = await res.json();
+    return { 
+        text: json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '',
+        provider: 'gemini'
+    };
+  }
+
+  // -------------------------------------------------------------
+  // ROUTE 3: Ollama (Default)
+  // -------------------------------------------------------------
+  // Standard Ollama endpoint
+  const endpoint = (cfg.get('endpoint') as string) || 'http://127.0.0.1:11434/api/chat';
+  
+  const body = {
+    model,
+    messages: [
+      args.system ? { role: 'system', content: args.system } : undefined,
+      { role: 'user', content: args.prompt },
+    ].filter(Boolean),
+    stream: false,
+    options: {
+        temperature: cfg.get<number>('temperature') ?? 0.2
+    }
+  };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
 
-    if (!res.ok) {
-      throw new Error(`EduAI ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
 
     const data: any = await res.json();
-    const text: string =
-      data?.response ||
-      data?.text ||
-      data?.message ||
-      data?.choices?.[0]?.message?.content ||
-      '';
+    const text = data?.message?.content || data?.response || '';
 
     return {
       text,
       usage: approxUsage(text, args.prompt),
-      provider: 'eduai',
+      provider: 'ollama',
     };
+  } catch (err: any) {
+    throw new Error(`Ollama connection failed. Is 'ollama serve' running? Error: ${err.message}`);
   }
-
-  // -------------------------------------------------------------
-  // 2) Gemini (Google Generative Language)
-  // -------------------------------------------------------------
-  const shouldUseGemini =
-    apiProvider === 'gemini' ||
-    (apiProvider === 'auto' && model.toLowerCase().startsWith('gemini'));
-
-  if (shouldUseGemini) {
-    const geminiApiKey =
-      process.env.GEMINI_API_KEY || // Priority 1: Environment variable
-      cfg.get<string>('gemini.apiKey') || // Priority 2: Extension specific setting
-      cfg.get<string>('eduai.gemini.apiKey') || // Priority 3: Legacy setting
-      '';
-
-    const geminiModel =
-      model || (cfg.get<string>('gemini.model') ?? 'gemini-2.0-flash');
-
-    if (!geminiApiKey) {
-      throw new Error(
-        "Gemini API key missing. Set 'vibelearner.gemini.apiKey' in Settings or GEMINI_API_KEY in env."
-      );
-    }
-
-    const text = await callGemini({
-      apiKey: geminiApiKey,
-      model: geminiModel,
-      userText: args.prompt,
-      systemText: args.system,
-      temperature: cfg.get<number>('temperature') ?? 0.2,
-    });
-
-    return {
-      text,
-      usage: approxUsage(text, args.prompt),
-      provider: 'gemini',
-    };
-  }
-
-  // -------------------------------------------------------------
-  // 3) Fallback: OpenAI / Ollama compatible endpoint (backwards compat)
-  // -------------------------------------------------------------
-  const endpoint =
-    (cfg.get('endpoint') as string) ||
-    'http://127.0.0.1:11434/api/generate';
-
-  const isChat = /\/api\/chat(?:\/?$)/.test(endpoint);
-
-  const body = isChat
-    ? {
-        model,
-        messages: [
-          args.system ? { role: 'system', content: args.system } : undefined,
-          { role: 'user', content: args.prompt },
-        ].filter(Boolean),
-        stream: false,
-      }
-    : {
-        model,
-        prompt:
-          (args.system ? `System: ${args.system}\n\n` : '') +
-          `User: ${args.prompt}`,
-        stream: false,
-      };
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}`);
-  }
-
-  const data: any = await res.json();
-  const text: string = isChat
-    ? data?.message?.content || data?.choices?.[0]?.message?.content || ''
-    : data?.response || '';
-
-  return {
-    text,
-    usage: approxUsage(text, args.prompt),
-    provider: 'ollama',
-  };
 }
 
 function approxUsage(output: string, input: string) {
@@ -196,70 +135,5 @@ function approxUsage(output: string, input: string) {
   return { totalTokens: total };
 }
 
-async function callGemini(params: {
-  apiKey: string;
-  model: string;
-  userText: string;
-  systemText?: string;
-  temperature?: number;
-}): Promise<string> {
-  const { apiKey, model, userText, systemText, temperature = 0.2 } = params;
-
-  // 1. Try v1beta first (supports the dedicated systemInstruction field)
-  const v1betaUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  
-  const v1betaBody: any = {
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    generationConfig: { temperature },
-  };
-
-  if (systemText) {
-    v1betaBody.systemInstruction = {
-      role: 'system',
-      parts: [{ text: systemText }],
-    };
-  }
-
-  try {
-    const resp = await fetch(v1betaUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(v1betaBody),
-    });
-
-    if (resp.ok) {
-      const json: any = await resp.json();
-      return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    }
-
-    // 2. Fallback to v1 ONLY if v1beta fails
-    const v1Url = v1betaUrl.replace('v1beta', 'v1');
-    const v1Body = {
-      contents: [{ 
-        role: 'user', 
-        parts: [{ text: systemText ? `${systemText}\n\n${userText}` : userText }] 
-      }],
-      generationConfig: { temperature },
-      // Note: No systemInstruction field exists in this object
-    };
-
-    const v1Resp = await fetch(v1Url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(v1Body),
-    });
-
-    if (v1Resp.ok) {
-      const v1Json: any = await v1Resp.json();
-      return v1Json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    }
-    
-    const errText = await v1Resp.text();
-    throw new Error(`Gemini Fallback Error: ${v1Resp.status} ${errText}`);
-  } catch (err: any) {
-    throw new Error(`Chat failed: ${err.message}`);
-  }
-}
-
-// `fetch` is provided by VS Code web runtime in Node >=18; declare for TS.
+// `fetch` provided by VS Code runtime
 declare const fetch: any;

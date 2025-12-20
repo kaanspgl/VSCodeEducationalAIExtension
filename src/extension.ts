@@ -1,9 +1,10 @@
-// src/extension.ts
 import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
 import { callBackend } from './shared/callBackend';
 
 export async function activate(context: vscode.ExtensionContext) {
+  const cfg = vscode.workspace.getConfiguration('vibelearner');
+
   // Show the chat panel
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.showChat', () => {
@@ -18,7 +19,7 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Ask about current selection: opens panel, injects selection, presets prompt
+  // Ask about current selection
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.askSelection', async () => {
       const ed = vscode.window.activeTextEditor;
@@ -37,10 +38,8 @@ export async function activate(context: vscode.ExtensionContext) {
       const filename = doc.uri.toString();
       const selection = doc.getText(sel).slice(0, 10000);
 
-      // Open the chat panel
       ChatPanel.createOrShow(context.extensionUri);
 
-      // Give it a moment to load before sending message
       setTimeout(() => {
         ChatPanel.postToWebview({
           type: 'activeContext',
@@ -68,15 +67,13 @@ export async function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        // Use TextDocument to get languageId reliably
         const doc = await vscode.workspace.openTextDocument(uri);
         const language = doc.languageId;
         const filename = uri.toString();
-        const content = doc.getText().slice(0, 20000); // cap to keep it snappy
+        const content = doc.getText().slice(0, 20000); 
 
         ChatPanel.createOrShow(context.extensionUri);
 
-        // Reuse the same message shape the webview understands
         ChatPanel.postToWebview({
           type: 'activeContext',
           payload: { language, filename, selection: content }
@@ -85,7 +82,7 @@ export async function activate(context: vscode.ExtensionContext) {
         ChatPanel.postToWebview({
           type: 'presetPrompt',
           payload: {
-            text: 'Give me a high-level explanation of this file, then suggest 2 improvements. Include one quick check-for-understanding.',
+            text: 'Give me a high-level explanation of this file, then suggest 2 improvements.',
             autoSend: false
           }
         });
@@ -100,12 +97,12 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('vibelearner.backend.chat', async (payload: any) => {
       const text = payload?.text ?? payload;
       const meta = payload?.meta ?? {};
-      const cfg = vscode.workspace.getConfiguration('vibelearner');
+      const config = vscode.workspace.getConfiguration('vibelearner');
 
+      // Updated default to Qwen
       const model =
-        cfg.get<string>('model') ||
-        cfg.get<string>('gemini.model') ||
-        'gemini-2.0-flash-lite';
+        config.get<string>('model') ||
+        'qwen3-coder:30b';
 
       const assist = meta.assist || 'Socratic';
       const objectives = Array.isArray(meta.objectives) ? meta.objectives.slice(0, 6) : [];
@@ -126,6 +123,7 @@ export async function activate(context: vscode.ExtensionContext) {
           model,
           prompt: finalPrompt,
           system,
+          context, 
         });
 
         const clean = (res.text || '')
@@ -143,7 +141,7 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Context providers used by the webview
+  // Context providers
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.backend.getContext', async ({ scope }) => {
       if (scope === 'activeFile') {
@@ -211,71 +209,37 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Save / export threads
+  // Logging for research data
   context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.saveThread', async ({ title, messages }) => {
-      const name = (title?.trim() || 'vibelearner-thread') + '.json';
-      const uri = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.file(name),
-        filters: { JSON: ['json'] },
-      });
-      if (!uri) return;
-      const json = JSON.stringify({ title, messages }, null, 2);
-      const bytes = new TextEncoder().encode(json);
-      await vscode.workspace.fs.writeFile(uri, bytes);
-      vscode.window.showInformationMessage('Thread saved.');
+    vscode.commands.registerCommand('vibelearner.backend.feedback', async (payload: any) => {
+      try {
+        const logEntry = {
+          timestamp: new Date().toISOString(),
+          assistMode: payload.meta?.assist || 'unknown',
+          model: payload.meta?.model || 'unknown',
+          userPrompt: payload.lastPrompt || 'N/A',
+          aiResponse: payload.lastResponse || 'N/A',
+          userRating: payload.value, 
+        };
+
+        const storageUri = context.globalStorageUri;
+        await vscode.workspace.fs.createDirectory(storageUri); 
+        const logFileUri = vscode.Uri.joinPath(storageUri, 'research_data_log.jsonl');
+
+        const encoded = new TextEncoder().encode(JSON.stringify(logEntry) + '\n');
+        const existingData = await vscode.workspace.fs.readFile(logFileUri).then(data => data, () => new Uint8Array());
+        
+        const combined = new Uint8Array(existingData.length + encoded.length);
+        combined.set(existingData);
+        combined.set(encoded, existingData.length);
+
+        await vscode.workspace.fs.writeFile(logFileUri, combined);
+      } catch (err) {
+        console.error('Failed to log research data:', err);
+      }
     })
   );
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.exportThread', async ({ format, messages }) => {
-      const md =
-        format === 'md'
-          ? messages
-              .map((m: any) => `**${m.role === 'assistant' ? 'Assistant' : 'You'}**\n\n${m.text}\n`)
-              .join('\n')
-          : JSON.stringify(messages, null, 2);
-      const mime = format === 'md' ? 'text/markdown' : 'application/json';
-      const base64 = toBase64(md);
-      return `data:${mime};base64=${base64}`;
-    })
-  );
-
-  // === Backend: Feedback logging for research data ===
-context.subscriptions.push(
-  vscode.commands.registerCommand('vibelearner.backend.feedback', async (payload: any) => {
-    try {
-      // 1. Create a structured log entry
-      const logEntry = {
-        timestamp: new Date().toISOString(),
-        assistMode: payload.meta?.assist || 'unknown',
-        model: payload.meta?.model || 'unknown',
-        userPrompt: payload.lastPrompt || 'N/A',
-        aiResponse: payload.lastResponse || 'N/A',
-        userRating: payload.value, // This is the 'Like/Dislike' or score
-      };
-
-      // 2. Define the path (saves to your extension's private folder)
-      const storageUri = context.globalStorageUri;
-      await vscode.workspace.fs.createDirectory(storageUri); // Ensure folder exists
-      const logFileUri = vscode.Uri.joinPath(storageUri, 'research_data_log.jsonl');
-
-      // 3. Append the new data to the file
-      const encoded = new TextEncoder().encode(JSON.stringify(logEntry) + '\n');
-      const existingData = await vscode.workspace.fs.readFile(logFileUri).then(data => data, () => new Uint8Array());
-      
-      const combined = new Uint8Array(existingData.length + encoded.length);
-      combined.set(existingData);
-      combined.set(encoded, existingData.length);
-
-      await vscode.workspace.fs.writeFile(logFileUri, combined);
-    } catch (err) {
-      console.error('Failed to log research data:', err);
-    }
-  })
-);
-
-  // === Quick Action commands -> tell the webview to activate that action ===
   const quick = (action: string) => {
     ChatPanel.createOrShow(context.extensionUri);
     setTimeout(() => {
@@ -295,8 +259,8 @@ context.subscriptions.push(
 
 export function deactivate() {}
 
-/* -------------------- PROMPTS -------------------- */
-// IMPORTANT: If mode is quiz/quiz-eval, we IGNORE assistive scaffolding (JSON only).
+// --- Prompts & Helpers ---
+
 function buildSystemPrompt(assist: string, mode: string) {
   if (mode === 'quiz') {
     return [
@@ -316,7 +280,6 @@ function buildSystemPrompt(assist: string, mode: string) {
     ].join(' ');
   }
 
-  // Teaching modes (friendly, cohesive, low-clutter responses)
   const base = [
     'You are VibeLearner, a course-aware coding tutor.',
     'Use a warm, concise, conversational tone.',
@@ -365,7 +328,6 @@ function buildLearningPrompt({
 
   parts.push(`Mode:${mode}; Assist:${assist}; Objectives:${objectives.join(' | ') || 'N/A'}`);
 
-  // include recent chat if present
   if (history?.length) {
     const lines = history
       .slice(0, 8)
@@ -376,8 +338,7 @@ function buildLearningPrompt({
 
   if (ctx.activeFile?.content) {
     const skeleton = getFileSkeleton(ctx.activeFile.content);
-    // We send the "Skeleton" of the whole file AND the first 4000 chars for detail
-    parts.push(`File Structure Overview:\n${skeleton}\n\nFile Content (truncated):\n${ctx.activeFile.content.slice(0, 4000)}`);
+    parts.push(`File Structure:\n${skeleton}\n\nActive File (truncated):\n${ctx.activeFile.content.slice(0, 4000)}`);
   }
   if (ctx.selection?.content) parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
   if (ctx.problems?.items?.length) parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
@@ -386,21 +347,18 @@ function buildLearningPrompt({
   if (mode === 'quiz') {
     parts.push(
       'Create a 3-question multiple-choice quiz that is SPECIFIC to the most recent discussion and attached code/context.',
-      'Prefer questions about the last user difficulty, misstatements, or the code shown.',
-      'Use concrete stems that reference variable names or behavior from the recent messages/selection.',
       'OUTPUT: JSON only (as specified). No answers embedded.'
     );
-    parts.push(`User:\n${userText || 'Generate quiz for what we just discussed.'}`);
+    parts.push(`User:\n${userText || 'Generate quiz.'}`);
   } else if (mode === 'quiz-eval') {
     parts.push('Evaluate the selected choice. OUTPUT: JSON only (as specified).');
     parts.push(`User:\n${userText}`);
   } else {
     const guidance = [
       'Write a cohesive tutoring reply (no headings).',
-      '- If the user gave a statement/answer: first say right or wrong, then explain why in 1–3 sentences; only then optionally ask ONE follow-up.',
+      '- If the user gave a statement/answer: first say right or wrong, then explain why in 1–3 sentences.',
       '- For questions: begin with one focused guiding question, then explain the strategy simply.',
-      '- Tiny runnable example only if helpful.',
-      '- Ask one quick CFU; end with a short reflection when appropriate.'
+      '- Ask one quick CFU.'
     ].join('\n');
     parts.push(guidance);
     parts.push(`User:\n${userText}`);
@@ -418,19 +376,6 @@ function normalizeCtx(ctx: any) {
   };
 }
 
-function toBase64(s: string) {
-  if (typeof Buffer !== 'undefined') return Buffer.from(s, 'utf8').toString('base64');
-  const bytes = new TextEncoder().encode(s);
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  // @ts-ignore
-  return btoa(binary);
-}
-
-/**
- * Trims a file down to its 'skeleton' (headers/imports) 
- * so the AI understands the overall structure without hitting token limits.
- */
 function getFileSkeleton(content: string): string {
   const lines = content.split('\n');
   return lines
