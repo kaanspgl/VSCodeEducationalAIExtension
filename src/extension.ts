@@ -265,6 +265,7 @@ export async function activate(context: vscode.ExtensionContext) {
           timestamp: new Date().toISOString(),
           assistMode: payload.meta?.assist || 'unknown',
           model: payload.meta?.model || 'unknown',
+          systemPrompt: payload.systemUsed,
           userPrompt: payload.lastPrompt || 'N/A',
           aiResponse: payload.lastResponse || 'N/A',
           userRating: payload.value, 
