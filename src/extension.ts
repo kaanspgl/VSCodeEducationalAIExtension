@@ -2,7 +2,13 @@ import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
 import { callBackend } from './shared/callBackend';
 
+/**
+ * Entry point for the VS Code extension.
+ * This function is called once when the extension is activated.
+ */
+
 export async function activate(context: vscode.ExtensionContext) {
+  // Load extension-specific configuration from settings.json
   const cfg = vscode.workspace.getConfiguration('vibelearner');
 
   // Show the chat panel
@@ -140,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // === Backend: learning-first chat ===
+  // Backend: learning-first chat
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.backend.chat', async (payload: any) => {
       const text = payload?.text ?? payload;
@@ -308,7 +314,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
-// --- Prompts & Helpers ---
+// Prompts & Helpers
 
 function buildSystemPrompt(assist: string, mode: string) {
   if (mode === 'quiz') {

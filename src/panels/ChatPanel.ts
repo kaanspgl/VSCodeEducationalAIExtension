@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
 
+/**
+ * Manages the lifecycle and messaging for the chat webview panel.
+ * Ensures only one panel exists at a time.
+ */
+
 export class ChatPanel {
   public static readonly viewType = 'vibelearner.chatPanel';
   public static currentPanel: ChatPanel | undefined;
@@ -15,6 +20,7 @@ export class ChatPanel {
     }
     const column = vscode.window.tabGroups.activeTabGroup?.viewColumn ?? vscode.ViewColumn.Two;
 
+    // If panel already exists, simply reveal it
     if (ChatPanel.currentPanel) {
       ChatPanel.currentPanel.panel.reveal(column);
       return;
@@ -95,6 +101,11 @@ export class ChatPanel {
       }
     });
 
+     /**
+     * Cleanup when the panel is closed.
+     * Clears the static reference so a new one can be created later.
+     */
+
     this.panel.onDidDispose(() => this.dispose(), null);
   }
 
@@ -102,6 +113,11 @@ export class ChatPanel {
     ChatPanel.currentPanel = undefined;
     this.panel.dispose();
   }
+
+   /**
+   * Returns the HTML content rendered inside the webview.
+   * This is intentionally minimal and can be expanded later.
+   */
 
   private getHtml(webview: vscode.Webview) {
     const nonce = getNonce();
