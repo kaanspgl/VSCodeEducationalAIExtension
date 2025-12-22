@@ -1,0 +1,155 @@
+{
+  "name": "vibelearner-ide-assistant",
+  "displayName": "VibeLearner IDE Assistant",
+  "description": "Vibe Coding inside VS Code: chat panel + pedagogical guidance.",
+  "version": "0.1.0",
+  "publisher": "Necmi Kaan Sapoglu",
+  "engines": {
+    "vscode": "^1.89.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:vibelearner.openChat",
+    "onCommand:vibelearner.showChat",
+    "onCommand:vibelearner.askSelection",
+    "onCommand:vibelearner.askFile"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "vibelearner.openChat",
+        "title": "VibeLearner: Open Chat"
+      },
+      {
+        "command": "vibelearner.showChat",
+        "title": "VibeLearner: Show Chat Panel"
+      },
+      {
+        "command": "vibelearner.askSelection",
+        "title": "VibeLearner: Ask About Selection"
+      },
+      {
+        "command": "vibelearner.askFile",
+        "title": "VibeLearner: Ask About File"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vibelearner.askSelection",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "vibelearner.askFile",
+          "group": "2_workspace"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "vibelearner.openChat",
+        "key": "ctrl+alt+;",
+        "mac": "cmd+alt+;",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "VibeLearner",
+      "properties": {
+        "vibelearner.apiProvider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "openai",
+            "ollama",
+            "gemini",
+            "eduai"
+          ],
+          "default": "ollama",
+          "description": "Which backend to use. Defaults to local Ollama."
+        },
+        "vibelearner.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434/api/chat",
+          "description": "HTTP endpoint. For Ollama use: http://127.0.0.1:11434/api/chat"
+        },
+        "vibelearner.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key."
+        },
+        "vibelearner.ollamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Ollama server URL."
+        },
+        "vibelearner.model": {
+          "type": "string",
+          "default": "qwen3-coder:30b",
+          "description": "Preferred model id."
+        },
+        "vibelearner.gemini.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google AI Studio / Gemini API key."
+        },
+        "vibelearner.gemini.model": {
+          "type": "string",
+          "default": "gemini-2.0-flash-lite-preview-02-05",
+          "description": "Gemini model id."
+        },
+        "vibelearner.defaultModel": {
+          "type": "string",
+          "default": "qwen3-coder:30b",
+          "description": "Fallback model id."
+        },
+        "vibelearner.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Default creativity/temperature."
+        },
+        "vibelearner.includeSelectionByDefault": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-attach current editor selection when opening chat."
+        },
+        "vibelearner.eduaiEndpoint": {
+          "type": "string",
+          "default": "https://eduai.ok.ubc.ca/api/chat",
+          "description": "EduAI chat endpoint (e.g. https://eduai.ok.ubc.ca/api/chat)."
+        },
+        "vibelearner.eduaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "EduAI backend API key used for course-aware RAG."
+        },
+        "vibelearner.courseCode": {
+          "type": "string",
+          "default": "DEMO101",
+          "description": "Default course code to send to EduAI for contextual RAG."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "echo \"no tests yet\""
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.89.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.6.2"
+  }
+}
