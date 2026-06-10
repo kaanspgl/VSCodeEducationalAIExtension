@@ -8,7 +8,9 @@ VibeLearner is a Visual Studio Code (VS Code) extension designed to transform AI
 VibeLearner utilizes a Role Task Requirements Instructions (RTRI) framework to enforce educational behaviors:
 * **Socratic Mode**: Strictly forbids providing full solution code. It uses targeted, open-ended questions to lead the user toward self-discovery and conceptual realization.
 * **Hinted Mode**: Provides 2–3 actionable hints to bridge the gap between total confusion and passive copying.
-* **Show-and-Tell Mode**: Prioritizes conceptual understanding by walking through step-by-step micro-examples instead of just production-ready code.
+* **Show-and-Tell Mode**: Uses a small, distinct example and asks the learner to transfer the concept back to their task.
+
+The interaction mode is a persistent teaching policy across the conversation. Responses are checked for direct-solution leakage; when a model returns a copyable fix in a constrained mode, VibeLearner rewrites or removes that portion before showing it.
 
 ### Metacognitive Scaffolding
 * **The Confidence Check**: Before explaining complex file structures, the system interrupts the generation flow and prompts the user to guess the file's purpose based on its imports.
@@ -17,10 +19,34 @@ VibeLearner utilizes a Role Task Requirements Instructions (RTRI) framework to e
 ## System Architecture
 
 VibeLearner is built on a hybrid client-server architecture designed for both performance and privacy:
-* **Frontend (Webview UI)**: A React-based chat interface rendered within a secure VS Code Webview, communicating via a message-passing protocol (`postMessage`).
+* **Frontend (Webview UI)**: A lightweight HTML/CSS/JavaScript chat interface rendered within a secure VS Code Webview, communicating via `postMessage`.
 * **Backend (Extension Host)**: A Node.js environment handling file system access, project state, and API orchestration.
 * **Provider Agnostic Abstraction Layer**: Located in `callBackend.ts`, this module routes requests to local LLMs (Ollama/Qwen) for privacy or cloud providers (Google Gemini) for high-complexity reasoning.
 * **Context Management**: Implements a Retrieval-Augmented Generation (RAG) pipeline that programmatically retrieves the active document state and user selections to ensure localized, accurate feedback.
+
+## Local Development
+
+1. Run `npm.cmd ci`.
+2. Run `npm.cmd test`.
+3. In VS Code, choose **Run VibeLearner Extension** from Run and Debug, or press `F5`.
+4. In the Extension Development Host, run **VibeLearner: Check Ollama Connection**.
+5. Run **VibeLearner: Open Chat**.
+
+For a guided feature test, open
+`examples/learning-playground.js`. It contains five intentional misconceptions
+matching the paper's evaluation scenarios. Select one function and run
+**VibeLearner: Ask About Selection**, or use **Ask About File** to test the
+confidence-check flow.
+
+The default local configuration uses:
+
+```json
+{
+  "vibelearner.apiProvider": "ollama",
+  "vibelearner.ollamaUrl": "http://127.0.0.1:11434",
+  "vibelearner.model": "qwen2.5:7b-instruct"
+}
+```
 
 ## Evaluation and Performance
 

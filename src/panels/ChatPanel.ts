@@ -11,6 +11,8 @@ export class ChatPanel {
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
+  private isReady = false;
+  private readonly pendingMessages: any[] = [];
 
   public static createOrShow(extensionUri: vscode.Uri) {
     // Open beside code (avoid full screen)
@@ -40,8 +42,16 @@ export class ChatPanel {
 
   public static postToWebview(message: any) {
     if (ChatPanel.currentPanel) {
-      ChatPanel.currentPanel.panel.webview.postMessage(message);
+      ChatPanel.currentPanel.postMessage(message);
     }
+  }
+
+  private postMessage(message: any) {
+    if (!this.isReady) {
+      this.pendingMessages.push(message);
+      return;
+    }
+    void this.panel.webview.postMessage(message);
   }
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
@@ -51,6 +61,13 @@ export class ChatPanel {
 
     this.panel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
+        case 'ready': {
+          this.isReady = true;
+          for (const message of this.pendingMessages.splice(0)) {
+            void this.panel.webview.postMessage(message);
+          }
+          break;
+        }
         case 'ask': {
           try {
             const res = await vscode.commands.executeCommand<{ text?: string; usage?: any; meta?: any }>(
@@ -59,20 +76,23 @@ export class ChatPanel {
             );
             this.panel.webview.postMessage({ type: 'answer', payload: res?.text ?? String(res) });
             this.panel.webview.postMessage({ type: 'usage', payload: res?.usage });
+            if (res?.meta?.policyRepaired) {
+              this.panel.webview.postMessage({
+                type: 'policyStatus',
+                payload: { assist: res.meta.assist }
+              });
+            }
           } catch (err: any) {
             this.panel.webview.postMessage({ type: 'answer', payload: `⚠️ ${err?.message || err}` });
           }
           break;
         }
         case 'requestActiveContext': {
-          const result = await vscode.commands.executeCommand('vibelearner.backend.getContext', { scope: 'activeFile' });
           const selection = await vscode.commands.executeCommand('vibelearner.backend.getContext', { scope: 'selection' });
           const payload = {
-            language: (result as any)?.language,
-            filename: (result as any)?.uri,
-            selection: (selection as any)?.content,
+            scope: 'selection',
+            result: selection,
           };
-          // still send context (background), but webview ignores auto-insert
           this.panel.webview.postMessage({ type: 'activeContext', payload });
           break;
         }
@@ -111,7 +131,6 @@ export class ChatPanel {
 
   dispose() {
     ChatPanel.currentPanel = undefined;
-    this.panel.dispose();
   }
 
    /**
@@ -125,7 +144,7 @@ export class ChatPanel {
     const jsUri  = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'chat.js'));
 
     const cfg = vscode.workspace.getConfiguration('vibelearner');
-    const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen3-coder:30b';
+    const model = (cfg.get('model') as string) || (cfg.get('defaultModel') as string) || 'qwen2.5:7b-instruct';
 
     const bootJson = JSON.stringify({ model })
       .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
@@ -163,7 +182,6 @@ export class ChatPanel {
         <label class="assist-opt"><input type="radio" name="assist" value="Socratic" checked> <b>Socratic</b><br><span>Asks one guiding question, then gives a small hint if you’re stuck.</span></label>
         <label class="assist-opt"><input type="radio" name="assist" value="Hinted"> <b>Hinted</b><br><span>2–3 actionable hints and a short plan; no full solution unless asked.</span></label>
         <label class="assist-opt"><input type="radio" name="assist" value="Show-and-Tell"> <b>Show &amp; Tell</b><br><span>Step-by-step with a tiny example and why it works.</span></label>
-        <label class="assist-opt"><input type="radio" name="assist" value="Direct"> <b>Direct</b><br><span>Solution first; then when/why to use it.</span></label>
       </div>
     </details>
 
@@ -175,11 +193,17 @@ export class ChatPanel {
     </label>
 
     <span id="tokenStats" class="badge" title="Approximate token usage">0 tokens</span>
+    <button id="new-chat" class="chip" title="Start a clean learning conversation">New Chat</button>
   </header>
 
   <!-- Single full-height main with sticky composer -->
   <main class="main one">
     <section class="pane chat" aria-label="Conversation">
+      <div class="learning-policy" id="learningPolicy">
+        <b>Learning-first mode:</b>
+        <span id="policyText">I will ask one focused question and withhold the final fix.</span>
+      </div>
+
       <!-- Context & Objectives dropdown (declutters UI) -->
       <details class="ctx" id="ctxDetails">
         <summary>

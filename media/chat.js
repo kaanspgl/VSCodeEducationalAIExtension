@@ -2,7 +2,7 @@
   let vscode;
   try { vscode = acquireVsCodeApi(); } catch (e) { return; }
 
-  const boot = (window.__VIBELEARNER_BOOT__ || { model: 'qwen3-coder:30b' });
+  const boot = (window.__VIBELEARNER_BOOT__ || { model: 'qwen2.5:7b-instruct' });
 
   // ---------- State ----------
   let messages = [];
@@ -49,9 +49,24 @@
       setStatus('Idle');
     }
 
-    // Background-only
-    else if (type === 'activeContext') { /* ignore */ }
-    else if (type === 'presetPrompt')  { /* ignore */ }
+    else if (type === 'activeContext') {
+      const scope = payload?.scope;
+      const result = payload?.result;
+      if (scope && result) {
+        attached[scope] = result;
+        markAttached(scope, true);
+        renderContext();
+        renderScopePreview(scope, result);
+      }
+    }
+    else if (type === 'presetPrompt') {
+      const text = String(payload?.text || '');
+      if ($('prompt')) $('prompt').value = text;
+      if (payload?.autoSend && text) runChat();
+    }
+    else if (type === 'quickAction') {
+      runQuickAction(payload?.action || 'chat');
+    }
 
     else if (type === 'ctx:result') {
       const scope = payload?.scope;
@@ -77,6 +92,9 @@
       const total = payload?.totalTokens || payload?.total || 0;
       if ($('tokenStats')) $('tokenStats').textContent = `${total} tokens`;
     }
+    else if (type === 'policyStatus') {
+      toast(`Learning-first safeguard applied in ${payload?.assist || 'current'} mode`, 2400);
+    }
   });
 
   // ---------- Assist dropdown ----------
@@ -88,6 +106,7 @@
       if (t && t.tagName === 'INPUT' && t.name === 'assist') {
         _state.assist = t.value || 'Socratic';
         if (assistLabel) assistLabel.textContent = _state.assist;
+        updatePolicyText();
         setTimeout(() => assistDetails.removeAttribute('open'), 80);
       }
     });
@@ -147,6 +166,24 @@
     toast('Inserted current selection into background context');
   });
   on('send', 'click', runChat);
+  on('new-chat', 'click', () => {
+    if (busy) return;
+    messages = [];
+    attached = {};
+    lastQuizJson = null;
+    objectives = objectives.map(objective => ({ ...objective, status: 'unassessed' }));
+    document.querySelectorAll('.ctx-btn[data-scope]').forEach(btn => {
+      btn.classList.remove('attached');
+    });
+    document.querySelectorAll('.ctx-preview').forEach(preview => preview.remove());
+    if ($('prompt')) $('prompt').value = '';
+    if ($('tokenStats')) $('tokenStats').textContent = '0 tokens';
+    render();
+    renderContext();
+    renderObjectives();
+    persist();
+    toast('Started a new learning conversation');
+  });
 
   // ---------- Sending ----------
   function runChat(){
@@ -154,13 +191,15 @@
     const text = ($('prompt')?.value || '').trim();
     if (!text) return;
 
+    // Capture only completed turns. The current learner message is sent separately.
+    const history = getRecentHistory();
     appendUser(text);  // show user bubble
     $('prompt').value = '';
 
     setBusy(true);
     setStatus('Thinking…');
 
-    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+    const model = $('model')?.value || (boot && boot.model) || 'qwen2.5:7b-instruct';
     const implied = inferModeFromText(text);
     const mode = implied === 'chat' ? _state.action : implied;
 
@@ -172,9 +211,9 @@
           assist: _state.assist,
           model,
           mode,
-          objectives: objectives.map(o => o.label),
+          objectives: objectives.map(({ label, status }) => ({ label, status })),
           context: attached,
-          history: getRecentHistory()
+          history
         }
       }
     });
@@ -183,7 +222,7 @@
   function runQuickAction(act){
     const prompts = {
       explain: 'Explain the attached context or most recent discussion in 6–10 sentences with one tiny runnable example and 1 CFU.',
-      review:  'Review the attached code for correctness, readability, and edge cases. Provide a short diff patch.',
+      review:  'Help me review the attached code one issue at a time. Focus on reasoning, correctness, readability, and edge cases without writing a patch.',
       plan:    'Propose a short step-by-step plan (3–5 steps) with pitfalls and checkpoints for the attached context.',
       hints:   'Give 2–3 guiding hints that unlock the next step based on the attached context. Do not reveal the final answer.',
       reflect: 'Prompt me for a 1–2 sentence reflection about what I changed and why, based on our recent discussion.',
@@ -195,7 +234,7 @@
     setBusy(true);
     setStatus('Thinking…');
 
-    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+    const model = $('model')?.value || (boot && boot.model) || 'qwen2.5:7b-instruct';
     vscode.postMessage({
       type: 'ask',
       payload: {
@@ -204,7 +243,7 @@
           assist: _state.assist,
           model,
           mode: act,
-          objectives: objectives.map(o => o.label),
+          objectives: objectives.map(({ label, status }) => ({ label, status })),
           context: attached,
           history: getRecentHistory()
         }
@@ -215,7 +254,7 @@
   function fireQuizBackground(){
     setBusy(true);
     setStatus('Building…');
-    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+    const model = $('model')?.value || (boot && boot.model) || 'qwen2.5:7b-instruct';
     vscode.postMessage({
       type: 'ask',
       payload: {
@@ -224,7 +263,7 @@
           assist: _state.assist,
           model,
           mode: 'quiz',
-          objectives: objectives.map(o => o.label),
+          objectives: objectives.map(({ label, status }) => ({ label, status })),
           context: attached,
           history: getRecentHistory()
         }
@@ -420,14 +459,20 @@
   // ---------- Quiz grading ----------
   function evalQuizChoice(qId, choiceId){
     if (!lastQuizJson || !qId || !choiceId) return;
-    const model = $('model')?.value || (boot && boot.model) || 'qwen3-coder:30b';
+    const model = $('model')?.value || (boot && boot.model) || 'qwen2.5:7b-instruct';
     const evalPayload = JSON.stringify({ quiz: lastQuizJson, qId, choiceId });
 
     vscode.postMessage({
       type: 'ask',
       payload: {
         text: `Evaluate this quiz answer:\n${evalPayload}`,
-        meta: { assist: _state.assist, model, mode: 'quiz-eval', objectives: objectives.map(o=>o.label), context: attached }
+        meta: {
+          assist: _state.assist,
+          model,
+          mode: 'quiz-eval',
+          objectives: objectives.map(({ label, status }) => ({ label, status })),
+          context: attached
+        }
       }
     });
   }
@@ -475,6 +520,17 @@
     return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>`;
   }
 
+  function updatePolicyText(){
+    const el = $('policyText');
+    if (!el) return;
+    const descriptions = {
+      'Socratic': 'I will ask one focused question and withhold the final fix.',
+      'Hinted': 'I will give 2-3 graduated hints without completing the task.',
+      'Show-and-Tell': 'I will teach with a different example, then ask you to transfer the idea.'
+    };
+    el.textContent = descriptions[_state.assist] || descriptions.Socratic;
+  }
+
   // ---------- Status + utils ----------
   function setBusy(v){
     busy = !!v;
@@ -504,7 +560,15 @@
     const esc = String(md);
     const fenced = esc.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) =>
       `<pre><code data-lang="${lang||''}">${escapeHtml(code)}</code></pre>`);
-    return fenced.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
+    const headings = fenced.replace(/^#{1,6}\s+(.+)$/gm, '<strong class="response-heading">$1</strong>');
+    const bullets = headings.replace(/(?:^|\n)(?:[-*]\s+.+(?:\n|$))+/g, block => {
+      const items = block.trim().split('\n')
+        .map(line => line.replace(/^[-*]\s+/, ''))
+        .map(line => `<li>${line}</li>`)
+        .join('');
+      return `<ul>${items}</ul>`;
+    });
+    return bullets.replace(/\n\n+/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>');
   }
 
   function getRecentHistory(limit = 8, maxChars = 4000){
@@ -537,9 +601,12 @@
       const assistLabel = document.getElementById('assistLabel');
       if (assistLabel) assistLabel.textContent = _state.assist;
 
-      render(); renderContext(); renderObjectives();
+      render(); renderContext(); renderObjectives(); updatePolicyText();
       setStatus('Idle');
       Object.keys(attached).forEach(s => { markAttached(s, true); renderScopePreview(s, attached[s]); });
     } catch {}
   })();
+
+  updatePolicyText();
+  vscode.postMessage({ type: 'ready' });
 })();

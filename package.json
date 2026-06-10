@@ -15,7 +15,8 @@
     "onCommand:vibelearner.openChat",
     "onCommand:vibelearner.showChat",
     "onCommand:vibelearner.askSelection",
-    "onCommand:vibelearner.askFile"
+    "onCommand:vibelearner.askFile",
+    "onCommand:vibelearner.checkOllama"
   ],
   "contributes": {
     "commands": [
@@ -34,6 +35,10 @@
       {
         "command": "vibelearner.askFile",
         "title": "VibeLearner: Ask About File"
+      },
+      {
+        "command": "vibelearner.checkOllama",
+        "title": "VibeLearner: Check Ollama Connection"
       }
     ],
     "menus": {
@@ -76,8 +81,8 @@
         },
         "vibelearner.endpoint": {
           "type": "string",
-          "default": "http://127.0.0.1:11434/api/chat",
-          "description": "HTTP endpoint. For Ollama use: http://127.0.0.1:11434/api/chat"
+          "default": "",
+          "description": "Optional full chat endpoint override. Leave blank to use ollamaUrl + /api/chat."
         },
         "vibelearner.openaiApiKey": {
           "type": "string",
@@ -91,7 +96,7 @@
         },
         "vibelearner.model": {
           "type": "string",
-          "default": "qwen3-coder:30b",
+          "default": "qwen2.5:7b-instruct",
           "description": "Preferred model id."
         },
         "vibelearner.gemini.apiKey": {
@@ -106,7 +111,7 @@
         },
         "vibelearner.defaultModel": {
           "type": "string",
-          "default": "qwen3-coder:30b",
+          "default": "qwen2.5:7b-instruct",
           "description": "Fallback model id."
         },
         "vibelearner.temperature": {
@@ -144,7 +149,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "echo \"no tests yet\""
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

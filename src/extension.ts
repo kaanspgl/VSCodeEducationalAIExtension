@@ -1,6 +1,19 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
-import { callBackend } from './shared/callBackend';
+import { callBackend, checkOllamaConnection } from './shared/callBackend';
+import {
+  buildLearningPrompt as buildPedagogicalPrompt,
+  buildQuizRepairPrompt,
+  buildRepairPrompt,
+  buildSystemPrompt as buildPedagogicalSystemPrompt,
+  findDialogueViolations,
+  findPolicyViolations,
+  findQuizViolations,
+  normalizeAssist,
+  safeFallback,
+  safeQuizFallback,
+  sanitizePolicyViolations,
+} from './shared/pedagogy';
 
 /**
  * Entry point for the VS Code extension.
@@ -8,9 +21,6 @@ import { callBackend } from './shared/callBackend';
  */
 
 export async function activate(context: vscode.ExtensionContext) {
-  // Load extension-specific configuration from settings.json
-  const cfg = vscode.workspace.getConfiguration('vibelearner');
-
   // Show the chat panel
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.showChat', () => {
@@ -46,20 +56,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
       ChatPanel.createOrShow(context.extensionUri);
 
-      setTimeout(() => {
-        ChatPanel.postToWebview({
-          type: 'activeContext',
-          payload: { language, filename, selection }
-        });
+      ChatPanel.postToWebview({
+        type: 'activeContext',
+        payload: {
+          scope: 'selection',
+          result: { language, filename, bytes: selection.length, content: selection }
+        }
+      });
 
-        ChatPanel.postToWebview({
-          type: 'presetPrompt',
-          payload: {
-            text: `Explain this ${language} code step by step: \n\n${selection}`,
-            autoSend: false
-          }
-        });
-        }, 200);
+      ChatPanel.postToWebview({
+        type: 'presetPrompt',
+        payload: {
+          text: `Explain this ${language} code step by step:\n\n${selection}`,
+          autoSend: false
+        }
+      });
       })
     );
   
@@ -130,7 +141,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
         ChatPanel.postToWebview({
           type: 'activeContext',
-          payload: { language, filename, selection: content }
+          payload: {
+            scope: 'activeFile',
+            result: { language, uri: filename, content }
+          }
         });
 
         ChatPanel.postToWebview({
@@ -146,6 +160,25 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('vibelearner.checkOllama', async () => {
+      try {
+        const { models } = await checkOllamaConnection();
+        const configuredModel =
+          vscode.workspace.getConfiguration('vibelearner').get<string>('model') ||
+          'qwen2.5:7b-instruct';
+        const available = models.includes(configuredModel);
+        const detail = models.length ? models.join(', ') : 'no models reported';
+        const message = available
+          ? `Ollama is ready. ${configuredModel} is installed.`
+          : `Ollama is running, but ${configuredModel} is not installed. Available: ${detail}`;
+        (available ? vscode.window.showInformationMessage : vscode.window.showWarningMessage)(message);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`VibeLearner: ${err?.message || err}`);
+      }
+    })
+  );
+
   // Backend: learning-first chat
   context.subscriptions.push(
     vscode.commands.registerCommand('vibelearner.backend.chat', async (payload: any) => {
@@ -155,15 +188,28 @@ export async function activate(context: vscode.ExtensionContext) {
 
       // Updated default to Qwen
       const model =
+        meta.model ||
         config.get<string>('model') ||
-        'qwen3-coder:30b';
+        'qwen2.5:7b-instruct';
 
-      const assist = meta.assist || 'Socratic';
-      const objectives = Array.isArray(meta.objectives) ? meta.objectives.slice(0, 6) : [];
+      const assist = normalizeAssist(meta.assist);
+      const objectives = Array.isArray(meta.objectives)
+        ? meta.objectives
+            .slice(0, 6)
+            .map((item: any) =>
+              typeof item === 'string'
+                ? { label: item, status: 'unassessed' }
+                : {
+                    label: String(item?.label || ''),
+                    status: String(item?.status || 'unassessed'),
+                  }
+            )
+            .filter((item: any) => item.label)
+        : [];
       const mode = meta.mode || 'chat';
 
-      const system = buildSystemPrompt(assist, mode);
-      const finalPrompt = buildLearningPrompt({
+      const system = buildPedagogicalSystemPrompt(assist, mode);
+      const finalPrompt = buildPedagogicalPrompt({
         userText: text,
         assist,
         objectives,
@@ -180,14 +226,62 @@ export async function activate(context: vscode.ExtensionContext) {
           context, 
         });
 
-        const clean = (res.text || '')
+        let clean = (res.text || '')
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
           .trim();
+        let policyRepaired = false;
+        if (mode === 'quiz') {
+          let quizViolations = findQuizViolations(clean, meta.history || []);
+          if (quizViolations.length) {
+            policyRepaired = true;
+            const repairedQuiz = await callBackend({
+              model,
+              system,
+              prompt: buildQuizRepairPrompt(clean, quizViolations, meta.history || []),
+              context,
+            });
+            clean = (repairedQuiz.text || '')
+              .replace(/<think>[\s\S]*?<\/think>/gi, '')
+              .trim();
+            quizViolations = findQuizViolations(clean, meta.history || []);
+            if (quizViolations.length) clean = safeQuizFallback(meta.history || []);
+          }
+        }
+
+        let violations = [
+          ...findPolicyViolations(clean, assist),
+          ...findDialogueViolations(clean, meta.history || [], text),
+        ];
+
+        if (mode !== 'quiz' && mode !== 'quiz-eval' && violations.length) {
+          policyRepaired = true;
+          const repaired = await callBackend({
+            model,
+            system,
+            prompt: buildRepairPrompt(clean, violations, assist, meta.history || []),
+            context,
+          });
+          clean = (repaired.text || '')
+            .replace(/<think>[\s\S]*?<\/think>/gi, '')
+            .trim();
+          violations = [
+            ...findPolicyViolations(clean, assist),
+            ...findDialogueViolations(clean, meta.history || [], text),
+          ];
+          if (violations.length) {
+            clean = sanitizePolicyViolations(clean, assist);
+            violations = [
+              ...findPolicyViolations(clean, assist),
+              ...findDialogueViolations(clean, meta.history || [], text),
+            ];
+          }
+          if (violations.length) clean = safeFallback(assist, meta.history || [], text);
+        }
 
         return {
           text: clean,
           usage: res.usage,
-          meta: { model, provider: res.provider, assist, mode },
+          meta: { model, provider: res.provider, assist, mode, policyRepaired },
         };
       } catch (err: any) {
         throw new Error(`Chat failed: ${err?.message || err}`);

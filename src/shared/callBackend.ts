@@ -13,6 +13,22 @@ type CallResult = {
   provider: 'ollama' | 'openai' | 'gemini' | 'eduai';
 };
 
+export async function checkOllamaConnection(): Promise<{ models: string[] }> {
+  const cfg = vscode.workspace.getConfiguration('vibelearner');
+  const baseUrl = String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const res = await fetch(`${baseUrl}/api/tags`);
+  if (!res.ok) {
+    throw new Error(`Ollama returned ${res.status} ${res.statusText}`);
+  }
+
+  const data: any = await res.json();
+  return {
+    models: Array.isArray(data?.models)
+      ? data.models.map((item: any) => String(item?.name || item?.model || '')).filter(Boolean)
+      : []
+  };
+}
+
 export async function callBackend(args: CallArgs): Promise<CallResult> {
   const cfg = vscode.workspace.getConfiguration('vibelearner');
 
@@ -21,7 +37,7 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
   let apiProvider = String(cfg.get('apiProvider') ?? 'ollama').toLowerCase();
   
   // 2. Determine Model
-  const model = args.model || String(cfg.get('model') ?? 'qwen3-coder:30b');
+  const model = args.model || String(cfg.get('model') ?? 'qwen2.5:7b-instruct');
 
   // Auto-detection logic: If "auto", guess provider from model name
   if (apiProvider === 'auto') {
@@ -46,7 +62,7 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
       body: JSON.stringify({
         messages: [{ role: 'user', content: args.prompt }],
         model,
-        courseCode: 'DEMO101'
+        courseCode: cfg.get<string>('courseCode') || 'DEMO101'
       }),
     });
     if (!res.ok) throw new Error(`EduAI Error: ${res.status}`);
@@ -94,7 +110,9 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
   // ROUTE 3: Ollama (Default)
   // -------------------------------------------------------------
   // Standard Ollama endpoint
-  const endpoint = (cfg.get('endpoint') as string) || 'http://127.0.0.1:11434/api/chat';
+  const configuredEndpoint = String(cfg.get('endpoint') ?? '').trim();
+  const ollamaUrl = String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const endpoint = configuredEndpoint || `${ollamaUrl}/api/chat`;
   
   const body = {
     model,
@@ -115,7 +133,10 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
       body: JSON.stringify(body),
     });
 
-    if (!res.ok) throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`Ollama Error: ${res.status} ${res.statusText}${detail ? ` - ${detail}` : ''}`);
+    }
 
     const data: any = await res.json();
     const text = data?.message?.content || data?.response || '';
