@@ -1,7 +1,7 @@
 {
   "name": "vibelearner-ide-assistant",
   "displayName": "VibeLearner IDE Assistant",
-  "description": "Vibe Coding inside VS Code: chat panel + pedagogical guidance.",
+  "description": "Research prototype: structured vibe coding (reason → code → review → check) for introductory programming.",
   "version": "0.1.0",
   "publisher": "Necmi Kaan Sapoglu",
   "engines": {
@@ -14,43 +14,23 @@
   "activationEvents": [
     "onCommand:vibelearner.openChat",
     "onCommand:vibelearner.showChat",
-    "onCommand:vibelearner.askSelection",
-    "onCommand:vibelearner.askFile"
+    "onCommand:vibelearner.revealStudyLogs"
   ],
   "contributes": {
     "commands": [
       {
         "command": "vibelearner.openChat",
-        "title": "VibeLearner: Open Chat"
+        "title": "VibeLearner: Open"
       },
       {
         "command": "vibelearner.showChat",
-        "title": "VibeLearner: Show Chat Panel"
+        "title": "VibeLearner: Show Panel"
       },
       {
-        "command": "vibelearner.askSelection",
-        "title": "VibeLearner: Ask About Selection"
-      },
-      {
-        "command": "vibelearner.askFile",
-        "title": "VibeLearner: Ask About File"
+        "command": "vibelearner.revealStudyLogs",
+        "title": "VibeLearner: Reveal Study Logs (researcher)"
       }
     ],
-    "menus": {
-      "editor/context": [
-        {
-          "command": "vibelearner.askSelection",
-          "group": "navigation",
-          "when": "editorHasSelection"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "vibelearner.askFile",
-          "group": "2_workspace"
-        }
-      ]
-    },
     "keybindings": [
       {
         "command": "vibelearner.openChat",
@@ -116,11 +96,6 @@
           "maximum": 1,
           "description": "Default creativity/temperature."
         },
-        "vibelearner.includeSelectionByDefault": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-attach current editor selection when opening chat."
-        },
         "vibelearner.eduaiEndpoint": {
           "type": "string",
           "default": "https://eduai.ok.ubc.ca/api/chat",
@@ -135,6 +110,72 @@
           "type": "string",
           "default": "DEMO101",
           "description": "Default course code to send to EduAI for contextual RAG."
+        },
+        "vibelearner.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used to run program tests (default: 'python' on Windows, 'python3' elsewhere)."
+        },
+        "vibelearner.study.condition": {
+          "type": "string",
+          "enum": [
+            "vibelearner",
+            "direct"
+          ],
+          "default": "vibelearner",
+          "description": "Study condition for this participant. 'vibelearner' = structured workflow; 'direct' = plain AI code generation (control). Set before the participant begins."
+        },
+        "vibelearner.study.language": {
+          "type": "string",
+          "enum": [
+            "python",
+            "javascript"
+          ],
+          "default": "python",
+          "description": "Programming language for all study tasks."
+        },
+        "vibelearner.study.taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "sum_positives",
+            "letter_grade",
+            "find_max",
+            "count_above_average"
+          ],
+          "description": "Ordered task ids used when study.mode is 'tasks' (see src/study/tasks.ts)."
+        },
+        "vibelearner.study.maxClarifications": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Maximum clarification rounds before code is generated anyway. Tune in the pilot."
+        },
+        "vibelearner.study.comprehensionQuestions": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 4,
+          "description": "Comprehension questions asked per task in the VibeLearner condition."
+        },
+        "vibelearner.study.mode": {
+          "type": "string",
+          "enum": [
+            "open",
+            "tasks"
+          ],
+          "default": "open",
+          "description": "'open' = the student builds any program they like (AI checks the request is detailed enough, then teaches while it builds). 'tasks' = fixed instructor-designed tasks with unit tests (for the controlled study)."
+        },
+        "vibelearner.study.quizQuestions": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 6,
+          "description": "Multiple-choice conceptual quiz questions after the code check (VibeLearner condition). 0 disables the quiz."
         }
       }
     }
