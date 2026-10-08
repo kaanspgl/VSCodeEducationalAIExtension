@@ -59,6 +59,7 @@ export class StudySession {
   private quizCount = 3;
   private quiz: { items: Mcq[]; index: number } | undefined;
   private quizResults: { correct: boolean }[] = [];
+  private quizDone = false;
   private terminal: vscode.Terminal | undefined;
 
   private participant = '';
@@ -113,7 +114,7 @@ export class StudySession {
     this.language = cfg.get<string>('study.language') === 'javascript' ? 'javascript' : 'python';
     this.model = cfg.get<string>('model') || cfg.get<string>('defaultModel') || 'qwen3-coder:30b';
     this.maxClarifications = clamp(cfg.get<number>('study.maxClarifications') ?? 2, 0, 5);
-    this.compCount = clamp(cfg.get<number>('study.comprehensionQuestions') ?? 2, 1, 4);
+    this.compCount = clamp(cfg.get<number>('study.comprehensionQuestions') ?? 1, 0, 4);
     this.quizCount = clamp(cfg.get<number>('study.quizQuestions') ?? 3, 0, 6);
     this.mode = cfg.get<string>('study.mode') === 'tasks' ? 'tasks' : 'open';
     const ids = cfg.get<string[]>('study.taskIds') ?? [];
@@ -147,6 +148,7 @@ export class StudySession {
     this.spec = '';
     this.quiz = undefined;
     this.quizResults = [];
+    this.quizDone = false;
     this.phase = this.condition === 'direct' ? 'chat' : 'explain';
     this.taskStart = Date.now();
     this.llmMs = 0;
@@ -377,9 +379,10 @@ export class StudySession {
       this.compRecords = [];
       this.asked = [];
       this.say('tutor',
-        `Quick check: ${this.compCount} short question${this.compCount > 1 ? 's' : ''} about the code on your screen. ` +
-        'Answer in a sentence or two; your code stays visible the whole time.');
-      await this.nextQuestion(undefined);
+        'Time for the check. First a short multiple-choice quiz on the ideas behind your code' +
+        (this.compCount > 0 ? ', then ' + (this.compCount > 1 ? 'a few questions' : 'a question') + ' where you predict what the code does and we run it to compare.' : '.') +
+        ' Your code stays open throughout.');
+      await this.beginCheckParts();
     } catch (err: any) {
       this.phase = 'review';
       this.setBusy(false);
@@ -452,7 +455,18 @@ Press **Start the check** to try again.`);
       await this.nextQuestion(undefined);
       return;
     }
-    await this.startQuiz();
+    this.completeCheck();
+  }
+
+  private async beginCheckParts() {
+    if (this.quizCount > 0 && !this.quizDone) await this.startQuiz();
+    else await this.startQuestions();
+  }
+
+  private async startQuestions() {
+    if (this.compCount <= 0) return this.completeCheck();
+    this.compIndex = 0;
+    await this.nextQuestion(undefined);
   }
 
   private completeCheck() {
@@ -462,7 +476,7 @@ Press **Start the check** to try again.`);
 
   // ---- Phase 3b: multiple-choice quiz on the ideas behind the code
   private async startQuiz() {
-    if (this.quizCount <= 0) return this.completeCheck();
+    if (this.quizCount <= 0) return this.startQuestions();
     this.setBusy(true, 'Preparing the quiz…');
     const res = await this.askJson<{ questions: Mcq[] }>(
       QUIZ_SYSTEM, quizPrompt(this.task, this.language, this.lastCode, this.quizCount, this.asked),
@@ -471,14 +485,14 @@ Press **Start the check** to try again.`);
         Number.isInteger(q.correct) && q.correct >= 0 && q.correct <= 3)
     );
     this.setBusy(false);
-    if (!res) return this.completeCheck();
+    if (!res) return this.startQuestions();
 
     const items = res.questions.slice(0, this.quizCount).map(q => shuffleMcq({
       stem: stripThinking(q.stem), choices: q.choices.map(c => String(c)), correct: q.correct, explanation: stripThinking(String(q.explanation ?? '')),
     }));
     this.quiz = { items, index: 0 };
     this.quizResults = [];
-    this.say('tutor', 'Last part: a short multiple-choice quiz on the ideas behind the code.');
+    this.say('tutor', 'Quiz: pick the best answer for each question.');
     this.logQuizQuestion();
   }
 
@@ -502,7 +516,13 @@ Press **Start the check** to try again.`);
     quiz.index++;
     if (quiz.index >= quiz.items.length) {
       this.quiz = undefined;
-      this.completeCheck();
+      this.quizDone = true;
+      try {
+        await this.startQuestions();
+      } catch (err: any) {
+        this.setBusy(false);
+        this.say('system', `⚠️ ${err?.message || err}`);
+      }
     } else {
       this.logQuizQuestion();
     }
@@ -773,7 +793,7 @@ Press **Start the check** to try again.`);
     let placeholder = '';
     if (inTask && idle) {
       if (this.phase === 'explain') { inputOn = true; placeholder = this.reasoning.length ? 'Reply to the tutor…' : 'Describe in your own words what the program should do…'; }
-      else if (this.phase === 'review') { inputOn = true; placeholder = this.pendingChange ? 'Answer the question above, then I\'ll make the change…' : 'Ask about a line, or request a change…'; }
+      else if (this.phase === 'review') { inputOn = !this.quiz; placeholder = this.pendingChange ? 'Answer the question above, then I\'ll make the change…' : 'Ask about a line, or request a change…'; }
       else if (this.phase === 'check') { inputOn = !this.checkDone && !this.quiz; placeholder = this.quiz ? 'Choose an answer above…' : 'Your answer (a sentence or two)…'; }
       else if (this.phase === 'chat') { inputOn = true; placeholder = 'Ask for code, an explanation, or a change…'; }
     }
@@ -782,7 +802,7 @@ Press **Start the check** to try again.`);
     v.actions = {
       runTests: inTask && idle && hasCode,
       needCode: inTask && idle && this.condition === 'vibelearner' && this.phase === 'explain',
-      ready: inTask && idle && this.phase === 'review',
+      ready: inTask && idle && this.phase === 'review' && !this.quiz,
       finish: inTask && idle,
     };
     this.onChange(v);

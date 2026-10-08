@@ -156,10 +156,10 @@
         },
         "vibelearner.study.comprehensionQuestions": {
           "type": "number",
-          "default": 2,
-          "minimum": 1,
+          "default": 1,
+          "minimum": 0,
           "maximum": 4,
-          "description": "Comprehension questions asked per task in the VibeLearner condition."
+          "description": "Predict-then-run questions asked after the multiple-choice quiz in the check (VibeLearner condition). 0 = quiz only."
         },
         "vibelearner.study.mode": {
           "type": "string",
@@ -175,7 +175,7 @@
           "default": 3,
           "minimum": 0,
           "maximum": 6,
-          "description": "Multiple-choice conceptual quiz questions after the code check (VibeLearner condition). 0 disables the quiz."
+          "description": "Multiple-choice conceptual quiz questions that open the check (VibeLearner condition). 0 skips the quiz."
         }
       }
     }
