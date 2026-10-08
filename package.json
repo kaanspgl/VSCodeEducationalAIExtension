@@ -1,7 +1,7 @@
 {
   "name": "vibelearner-ide-assistant",
   "displayName": "VibeLearner IDE Assistant",
-  "description": "Vibe Coding inside VS Code: chat panel + pedagogical guidance.",
+  "description": "Vibe coding that teaches: an AI pair-programmer that sees your whole project, proposes reviewable edits, explains every change, and checks your understanding.",
   "version": "0.1.0",
   "publisher": "Necmi Kaan Sapoglu",
   "engines": {
@@ -12,56 +12,54 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onCommand:vibelearner.openChat",
-    "onCommand:vibelearner.showChat",
-    "onCommand:vibelearner.askSelection",
-    "onCommand:vibelearner.askFile",
-    "onCommand:vibelearner.checkOllama"
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
       {
         "command": "vibelearner.openChat",
-        "title": "VibeLearner: Open Chat"
+        "title": "VibeLearner: Open"
       },
       {
         "command": "vibelearner.showChat",
-        "title": "VibeLearner: Show Chat Panel"
+        "title": "VibeLearner: Show Panel"
       },
       {
-        "command": "vibelearner.askSelection",
-        "title": "VibeLearner: Ask About Selection"
+        "command": "vibelearner.explainSelection",
+        "title": "VibeLearner: Explain Selection"
       },
       {
-        "command": "vibelearner.askFile",
-        "title": "VibeLearner: Ask About File"
+        "command": "vibelearner.changeSelection",
+        "title": "VibeLearner: Change Selection…"
+      },
+      {
+        "command": "vibelearner.quizProject",
+        "title": "VibeLearner: Quiz Me on My Program"
       },
       {
         "command": "vibelearner.checkOllama",
         "title": "VibeLearner: Check Ollama Connection"
+      },
+      {
+        "command": "vibelearner.setGeminiKey",
+        "title": "VibeLearner: Set Gemini API Key"
+      },
+      {
+        "command": "vibelearner.revealStudyLogs",
+        "title": "VibeLearner: Reveal Study Logs (researcher)"
       }
     ],
-    "menus": {
-      "editor/context": [
-        {
-          "command": "vibelearner.askSelection",
-          "group": "navigation",
-          "when": "editorHasSelection"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "vibelearner.askFile",
-          "group": "2_workspace"
-        }
-      ]
-    },
     "keybindings": [
       {
         "command": "vibelearner.openChat",
         "key": "ctrl+alt+;",
-        "mac": "cmd+alt+;",
-        "when": "editorTextFocus"
+        "mac": "cmd+alt+;"
+      },
+      {
+        "command": "vibelearner.explainSelection",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorHasSelection"
       }
     ],
     "configuration": {
@@ -96,7 +94,7 @@
         },
         "vibelearner.model": {
           "type": "string",
-          "default": "qwen2.5:7b-instruct",
+          "default": "qwen3-coder:30b",
           "description": "Preferred model id."
         },
         "vibelearner.gemini.apiKey": {
@@ -111,7 +109,7 @@
         },
         "vibelearner.defaultModel": {
           "type": "string",
-          "default": "qwen2.5:7b-instruct",
+          "default": "qwen3-coder:30b",
           "description": "Fallback model id."
         },
         "vibelearner.temperature": {
@@ -120,11 +118,6 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Default creativity/temperature."
-        },
-        "vibelearner.includeSelectionByDefault": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-attach current editor selection when opening chat."
         },
         "vibelearner.eduaiEndpoint": {
           "type": "string",
@@ -140,8 +133,144 @@
           "type": "string",
           "default": "DEMO101",
           "description": "Default course code to send to EduAI for contextual RAG."
+        },
+        "vibelearner.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used to run program tests (default: 'python' on Windows, 'python3' elsewhere)."
+        },
+        "vibelearner.study.condition": {
+          "type": "string",
+          "enum": [
+            "vibelearner",
+            "direct"
+          ],
+          "default": "vibelearner",
+          "description": "Study condition for this participant. 'vibelearner' = structured workflow; 'direct' = plain AI code generation (control). Set before the participant begins."
+        },
+        "vibelearner.study.language": {
+          "type": "string",
+          "enum": [
+            "python",
+            "javascript"
+          ],
+          "default": "python",
+          "description": "Programming language for all study tasks."
+        },
+        "vibelearner.study.taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "sum_positives",
+            "letter_grade",
+            "find_max",
+            "count_above_average"
+          ],
+          "description": "Ordered task ids used when study.mode is 'tasks' (see src/study/tasks.ts)."
+        },
+        "vibelearner.study.maxClarifications": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Maximum clarification rounds before code is generated anyway. Tune in the pilot."
+        },
+        "vibelearner.study.comprehensionQuestions": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 4,
+          "description": "Predict-then-run questions asked after the multiple-choice quiz in the check (VibeLearner condition). 0 = quiz only."
+        },
+        "vibelearner.study.mode": {
+          "type": "string",
+          "enum": [
+            "open",
+            "tasks"
+          ],
+          "default": "open",
+          "description": "'open' = the student builds any program they like (AI checks the request is detailed enough, then teaches while it builds). 'tasks' = fixed instructor-designed tasks with unit tests (for the controlled study)."
+        },
+        "vibelearner.study.quizQuestions": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 6,
+          "description": "Multiple-choice conceptual quiz questions that open the check (VibeLearner condition). 0 skips the quiz."
+        },
+        "vibelearner.workflow": {
+          "type": "string",
+          "enum": [
+            "vibe",
+            "study"
+          ],
+          "default": "vibe",
+          "description": "'vibe' = project mode (AI pair-programmer that teaches while you build). 'study' = the older fixed-task study workflow. Reopen the panel after changing."
+        },
+        "vibelearner.learning.level": {
+          "type": "string",
+          "enum": [
+            "off",
+            "light",
+            "guided"
+          ],
+          "default": "guided",
+          "enumDescriptions": [
+            "Plain vibe-coding assistant (comparison/control): no prompt coaching, planning, walkthroughs or checks.",
+            "All learning tools available as buttons (plan, walkthrough, predict & run, check, your turn); nothing starts automatically.",
+            "The learning loop runs automatically around every change: walkthrough before accepting, then predict & run, check, and a your-turn challenge. Every step can be skipped."
+          ],
+          "description": "How much learning support VibeLearner adds on top of vibe coding."
+        },
+        "vibelearner.learning.clarify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask clarifying questions (or explain conceptually) when a build request is too vague. Bounded by learning.maxClarifications."
+        },
+        "vibelearner.learning.maxClarifications": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Max clarifying rounds before the assistant builds anyway with stated assumptions."
+        },
+        "vibelearner.learning.questionsPerChange": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3,
+          "description": "Multiple-choice questions in the Check step for one change."
+        },
+        "vibelearner.learning.projectQuizQuestions": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Questions in 'Quiz me on my program'."
+        },
+        "vibelearner.context.maxChars": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 4000,
+          "description": "Character budget for project files sent to the model each turn. Larger = more of the program visible, slower on local models."
         }
       }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vibelearner.explainSelection",
+          "group": "vibelearner@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "vibelearner.changeSelection",
+          "group": "vibelearner@2",
+          "when": "editorHasSelection"
+        }
+      ]
     }
   },
   "scripts": {

@@ -1,9 +1,15 @@
 import * as vscode from 'vscode';
 
+export type ChatMsg = { role: 'user' | 'assistant'; content: string };
+
 type CallArgs = {
   model: string;
   prompt: string;
   system?: string;
+  /** Earlier turns of the conversation (oldest first). `prompt` is the newest user turn. */
+  history?: ChatMsg[];
+  /** Overrides the configured temperature (e.g. 0 for judge calls). */
+  temperature?: number;
   context: vscode.ExtensionContext;
 };
 
@@ -11,12 +17,12 @@ type CallResult = {
   text: string;
   usage?: { totalTokens?: number };
   provider: 'ollama' | 'openai' | 'gemini' | 'eduai';
+  /** Wall-clock time spent waiting on the model, kept separate from student time in study logs. */
+  ms: number;
 };
 
 export async function checkOllamaConnection(): Promise<{ models: string[] }> {
-  const cfg = vscode.workspace.getConfiguration('vibelearner');
-  const baseUrl = String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
-  const res = await fetch(`${baseUrl}/api/tags`);
+  const res = await fetch(`${ollamaBaseUrl()}/api/tags`);
   if (!res.ok) {
     throw new Error(`Ollama returned ${res.status} ${res.statusText}`);
   }
@@ -29,21 +35,33 @@ export async function checkOllamaConnection(): Promise<{ models: string[] }> {
   };
 }
 
-export async function callBackend(args: CallArgs): Promise<CallResult> {
+function ollamaBaseUrl(): string {
   const cfg = vscode.workspace.getConfiguration('vibelearner');
+  return String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
+}
+
+export async function callBackend(args: CallArgs): Promise<CallResult> {
+  const started = Date.now();
+  const res = await route(args);
+  return { ...res, ms: Date.now() - started };
+}
+
+async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
+  const cfg = vscode.workspace.getConfiguration('vibelearner');
+  const history = args.history ?? [];
+  const temperature = args.temperature ?? cfg.get<number>('temperature') ?? 0.2;
 
   // 1. Determine Provider
-  // Priority: Args -> Config -> Default (ollama)
   let apiProvider = String(cfg.get('apiProvider') ?? 'ollama').toLowerCase();
-  
+
   // 2. Determine Model
-  const model = args.model || String(cfg.get('model') ?? 'qwen2.5:7b-instruct');
+  const model = args.model || String(cfg.get('model') ?? 'qwen3-coder:30b');
 
   // Auto-detection logic: If "auto", guess provider from model name
   if (apiProvider === 'auto') {
     if (model.startsWith('gemini')) apiProvider = 'gemini';
     else if (model.startsWith('eduai')) apiProvider = 'eduai';
-    else apiProvider = 'ollama'; // Default to ollama for qwen, llama, etc.
+    else apiProvider = 'ollama';
   }
 
   console.log(`[VibeLearner] Routing: Provider=${apiProvider}, Model=${model}`);
@@ -54,15 +72,20 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
   if (apiProvider === 'eduai') {
     const endpoint = (cfg.get<string>('eduaiEndpoint') as string) || 'https://eduai.ok.ubc.ca/api/chat';
     const apiKey = cfg.get<string>('eduaiApiKey') || '';
-    if (!apiKey) throw new Error("EduAI API key missing.");
+    if (!apiKey) throw new Error('EduAI API key missing.');
 
+    const messages = [
+      ...(args.system ? [{ role: 'user', content: `[Instructions]\n${args.system}` }] : []),
+      ...history.map(h => ({ role: h.role, content: h.content })),
+      { role: 'user', content: args.prompt },
+    ];
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: args.prompt }],
+        messages,
         model,
-        courseCode: cfg.get<string>('courseCode') || 'DEMO101'
+        courseCode: cfg.get<string>('courseCode') || 'DEMO101',
       }),
     });
     if (!res.ok) throw new Error(`EduAI Error: ${res.status}`);
@@ -77,53 +100,56 @@ export async function callBackend(args: CallArgs): Promise<CallResult> {
     const geminiApiKey =
       process.env.GEMINI_API_KEY ||
       (await args.context.secrets.get('gemini_api_key')) ||
-      (cfg.get<string>('gemini.apiKey')) || '';
+      cfg.get<string>('gemini.apiKey') ||
+      '';
 
-    if (!geminiApiKey) throw new Error("Gemini API key missing.");
-    
-    // Using v1beta for modern models
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    if (!geminiApiKey) throw new Error('Gemini API key missing.');
+
+    const geminiModel = cfg.get<string>('gemini.model') || model;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`;
     const body: any = {
-        contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
-        generationConfig: { temperature: 0.2 }
+      contents: [
+        ...history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] })),
+        { role: 'user', parts: [{ text: args.prompt }] },
+      ],
+      generationConfig: { temperature },
     };
-    if(args.system) body.systemInstruction = { role: 'system', parts: [{ text: args.system }] };
+    if (args.system) body.systemInstruction = { role: 'system', parts: [{ text: args.system }] };
 
     const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
-        body: JSON.stringify(body)
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
+      body: JSON.stringify(body),
     });
-    
-    if(!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Gemini Error (${res.status}): ${txt}`);
+
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`Gemini Error (${res.status}): ${txt}`);
     }
     const json: any = await res.json();
-    return { 
-        text: json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '',
-        provider: 'gemini'
+    return {
+      text: json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '',
+      provider: 'gemini',
     };
   }
 
   // -------------------------------------------------------------
   // ROUTE 3: Ollama (Default)
   // -------------------------------------------------------------
-  // Standard Ollama endpoint
   const configuredEndpoint = String(cfg.get('endpoint') ?? '').trim();
-  const ollamaUrl = String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
-  const endpoint = configuredEndpoint || `${ollamaUrl}/api/chat`;
-  
+  const endpoint = configuredEndpoint || `${ollamaBaseUrl()}/api/chat`;
+
+  const messages = [
+    ...(args.system ? [{ role: 'system', content: args.system }] : []),
+    ...history.map(h => ({ role: h.role, content: h.content })),
+    { role: 'user', content: args.prompt },
+  ];
+
   const body = {
     model,
-    messages: [
-      args.system ? { role: 'system', content: args.system } : undefined,
-      { role: 'user', content: args.prompt },
-    ].filter(Boolean),
+    messages,
     stream: false,
-    options: {
-        temperature: cfg.get<number>('temperature') ?? 0.2
-    }
+    options: { temperature },
   };
 
   try {

@@ -1,172 +1,60 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
-import { callBackend, checkOllamaConnection } from './shared/callBackend';
-import {
-  buildLearningPrompt as buildPedagogicalPrompt,
-  buildQuizRepairPrompt,
-  buildRepairPrompt,
-  buildSystemPrompt as buildPedagogicalSystemPrompt,
-  findDialogueViolations,
-  findPolicyViolations,
-  findQuizViolations,
-  normalizeAssist,
-  safeFallback,
-  safeQuizFallback,
-  sanitizePolicyViolations,
-} from './shared/pedagogy';
+import { checkOllamaConnection } from './shared/callBackend';
+import { StudyLogger } from './study/logger';
+import { StudySession } from './study/session';
+import { ProposedContent } from './vibe/edits';
+import { VibeSession } from './vibe/session';
 
 /**
  * Entry point for the VS Code extension.
- * This function is called once when the extension is activated.
+ *
+ * VibeLearner is an AI vibe-coding assistant that teaches while it builds. Project mode (default)
+ * sees the whole workspace, proposes edits as reviewable diffs, explains every change in plain
+ * terms, and offers understanding checks. `vibelearner.learning.level = off` turns it into a plain
+ * vibe-coding assistant for comparison. The older fixed-task study workflow is kept behind
+ * `vibelearner.workflow = study`.
  */
-
 export async function activate(context: vscode.ExtensionContext) {
-  // Show the chat panel
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.showChat', () => {
-      ChatPanel.createOrShow(context.extensionUri);
-    })
-  );
+  const logger = new StudyLogger(context.globalStorageUri);
+  const study = new StudySession(context, logger, (view) => ChatPanel.pushState('study', view));
+  const vibe = new VibeSession(context, logger, (view) => ChatPanel.pushState('vibe', view));
+  const sessions = { study, vibe };
 
-  // Open chat (no selection required)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.openChat', () => {
-      ChatPanel.createOrShow(context.extensionUri);
-    })
-  );
-
-  // Ask about current selection
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.askSelection', async () => {
-      const ed = vscode.window.activeTextEditor;
-      if (!ed) {
-        vscode.window.showInformationMessage('No active editor.');
-        return;
-      }
-      const sel = ed.selection;
-      if (!sel || sel.isEmpty) {
-        vscode.window.showInformationMessage('Select some text first.');
-        return;
-      }
-
-      const doc = ed.document;
-      const language = doc.languageId;
-      const filename = doc.uri.toString();
-      const selection = doc.getText(sel).slice(0, 10000);
-
-      ChatPanel.createOrShow(context.extensionUri);
-
-      ChatPanel.postToWebview({
-        type: 'activeContext',
-        payload: {
-          scope: 'selection',
-          result: { language, filename, bytes: selection.length, content: selection }
-        }
-      });
-
-      ChatPanel.postToWebview({
-        type: 'presetPrompt',
-        payload: {
-          text: `Explain this ${language} code step by step:\n\n${selection}`,
-          autoSend: false
-        }
-      });
-      })
-    );
-  
-    // Track error counts per file to detect fixes
-    const errorState = new Map<string, number>();
-  
-    context.subscriptions.push(
-      vscode.languages.onDidChangeDiagnostics((e) => {
-        const ed = vscode.window.activeTextEditor;
-        if (!ed) return;
-
-        // Only check if the event affects the currently active file
-        const activeUriStr = ed.document.uri.toString();
-        if (e.uris.some(u => u.toString() === activeUriStr)) {
-          
-          // Count current errors (Red squigglies only)
-          const diags = vscode.languages.getDiagnostics(ed.document.uri);
-          const currentErrors = diags.filter(d => d.severity === vscode.DiagnosticSeverity.Error).length;
-          
-          // Get previous count (default to 0)
-          const prevErrors = errorState.get(activeUriStr) || 0;
-
-          if (prevErrors > 0 && currentErrors === 0) {
-            
-            // Trigger the reflection moment
-            // It waits 1.5 seconds so the user can breathe after fixing the bug
-            setTimeout(() => {
-              vscode.window.showInformationMessage(
-                "Nice fix! Time for a quick reflection?", 
-                "Quiz Me", "Later"
-              ).then(selection => {
-                if (selection === "Quiz Me") {
-                  ChatPanel.createOrShow(context.extensionUri);
-                  ChatPanel.postToWebview({
-                    type: 'presetPrompt',
-                    payload: {
-                      text: "I just fixed the errors in this file! Quiz me on why the fix worked and what concept I applied.",
-                      autoSend: true
-                    }
-                  });
-                }
-              });
-            }, 1500);
-          }
-
-          // Update state for next change
-          errorState.set(activeUriStr, currentErrors);
-        }
-      })
-  );
-
-  // Ask about a file from Explorer context menu
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.askFile', async (resourceUri?: vscode.Uri) => {
-      try {
-        const uri = resourceUri ?? vscode.window.activeTextEditor?.document.uri;
-        if (!uri) {
-          vscode.window.showInformationMessage('No file selected.');
-          return;
-        }
-
-        const doc = await vscode.workspace.openTextDocument(uri);
-        const language = doc.languageId;
-        const filename = uri.toString();
-        const content = doc.getText().slice(0, 20000); 
-
-        ChatPanel.createOrShow(context.extensionUri);
-
-        ChatPanel.postToWebview({
-          type: 'activeContext',
-          payload: {
-            scope: 'activeFile',
-            result: { language, uri: filename, content }
-          }
-        });
-
-        ChatPanel.postToWebview({
-          type: 'presetPrompt',
-          payload: {
-            text: `I'm analyzing ${filename.split('/').pop()}. Don't explain it yet! First, ask me to guess what it does based on the imports and class names.`,
-            autoSend: true
-          }
-        });
-      } catch (err: any) {
-        vscode.window.showErrorMessage(`VibeLearner: Failed to load file — ${err?.message || err}`);
-      }
-    })
-  );
+  const open = () => ChatPanel.createOrShow(context.extensionUri, sessions);
+  const isVibe = () => vscode.workspace.getConfiguration('vibelearner').get<string>('workflow') !== 'study';
 
   context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(ProposedContent.scheme, new ProposedContent()),
+
+    vscode.commands.registerCommand('vibelearner.openChat', open),
+    vscode.commands.registerCommand('vibelearner.showChat', open),
+
+    vscode.commands.registerCommand('vibelearner.explainSelection', async () => {
+      if (!isVibe()) return void vscode.window.showInformationMessage('Explain Selection is available in project mode (vibelearner.workflow = vibe).');
+      open();
+      await vibe.explainSelection();
+    }),
+    vscode.commands.registerCommand('vibelearner.changeSelection', async () => {
+      if (!isVibe()) return void vscode.window.showInformationMessage('Change Selection is available in project mode (vibelearner.workflow = vibe).');
+      open();
+      await vibe.changeSelection();
+    }),
+    vscode.commands.registerCommand('vibelearner.quizProject', async () => {
+      if (!isVibe()) return;
+      open();
+      await vibe.ensureStarted();
+      await vibe.action('quizProject');
+    }),
+
+    // Keep the header chip ("what the assistant is looking at") current.
+    vscode.window.onDidChangeActiveTextEditor(() => vibe.touch()),
+    vscode.window.onDidChangeTextEditorSelection(() => vibe.touch()),
+
     vscode.commands.registerCommand('vibelearner.checkOllama', async () => {
       try {
         const { models } = await checkOllamaConnection();
-        const configuredModel =
-          vscode.workspace.getConfiguration('vibelearner').get<string>('model') ||
-          'qwen2.5:7b-instruct';
+        const configuredModel = vscode.workspace.getConfiguration('vibelearner').get<string>('model') || 'qwen3-coder:30b';
         const available = models.includes(configuredModel);
         const detail = models.length ? models.join(', ') : 'no models reported';
         const message = available
@@ -176,376 +64,26 @@ export async function activate(context: vscode.ExtensionContext) {
       } catch (err: any) {
         vscode.window.showErrorMessage(`VibeLearner: ${err?.message || err}`);
       }
-    })
-  );
+    }),
 
-  // Backend: learning-first chat
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.chat', async (payload: any) => {
-      const text = payload?.text ?? payload;
-      const meta = payload?.meta ?? {};
-      const config = vscode.workspace.getConfiguration('vibelearner');
+    // Stores the Gemini key in the OS keychain (SecretStorage) instead of plain-text settings.
+    vscode.commands.registerCommand('vibelearner.setGeminiKey', async () => {
+      const key = await vscode.window.showInputBox({ prompt: 'Gemini API key (stored in your OS keychain)', password: true, ignoreFocusOut: true });
+      if (key === undefined) return;
+      if (key.trim()) await context.secrets.store('gemini_api_key', key.trim());
+      else await context.secrets.delete('gemini_api_key');
+      void vscode.window.showInformationMessage(key.trim() ? 'Gemini API key saved securely.' : 'Gemini API key removed.');
+    }),
 
-      // Updated default to Qwen
-      const model =
-        meta.model ||
-        config.get<string>('model') ||
-        'qwen2.5:7b-instruct';
-
-      const assist = normalizeAssist(meta.assist);
-      const objectives = Array.isArray(meta.objectives)
-        ? meta.objectives
-            .slice(0, 6)
-            .map((item: any) =>
-              typeof item === 'string'
-                ? { label: item, status: 'unassessed' }
-                : {
-                    label: String(item?.label || ''),
-                    status: String(item?.status || 'unassessed'),
-                  }
-            )
-            .filter((item: any) => item.label)
-        : [];
-      const mode = meta.mode || 'chat';
-
-      const system = buildPedagogicalSystemPrompt(assist, mode);
-      const finalPrompt = buildPedagogicalPrompt({
-        userText: text,
-        assist,
-        objectives,
-        mode,
-        contextData: meta.context || {},
-        history: meta.history || []
-      });
-
-      try {
-        const res = await callBackend({
-          model,
-          prompt: finalPrompt,
-          system,
-          context, 
-        });
-
-        let clean = (res.text || '')
-          .replace(/<think>[\s\S]*?<\/think>/gi, '')
-          .trim();
-        let policyRepaired = false;
-        if (mode === 'quiz') {
-          let quizViolations = findQuizViolations(clean, meta.history || []);
-          if (quizViolations.length) {
-            policyRepaired = true;
-            const repairedQuiz = await callBackend({
-              model,
-              system,
-              prompt: buildQuizRepairPrompt(clean, quizViolations, meta.history || []),
-              context,
-            });
-            clean = (repairedQuiz.text || '')
-              .replace(/<think>[\s\S]*?<\/think>/gi, '')
-              .trim();
-            quizViolations = findQuizViolations(clean, meta.history || []);
-            if (quizViolations.length) clean = safeQuizFallback(meta.history || []);
-          }
-        }
-
-        let violations = [
-          ...findPolicyViolations(clean, assist),
-          ...findDialogueViolations(clean, meta.history || [], text),
-        ];
-
-        if (mode !== 'quiz' && mode !== 'quiz-eval' && violations.length) {
-          policyRepaired = true;
-          const repaired = await callBackend({
-            model,
-            system,
-            prompt: buildRepairPrompt(clean, violations, assist, meta.history || []),
-            context,
-          });
-          clean = (repaired.text || '')
-            .replace(/<think>[\s\S]*?<\/think>/gi, '')
-            .trim();
-          violations = [
-            ...findPolicyViolations(clean, assist),
-            ...findDialogueViolations(clean, meta.history || [], text),
-          ];
-          if (violations.length) {
-            clean = sanitizePolicyViolations(clean, assist);
-            violations = [
-              ...findPolicyViolations(clean, assist),
-              ...findDialogueViolations(clean, meta.history || [], text),
-            ];
-          }
-          if (violations.length) clean = safeFallback(assist, meta.history || [], text);
-        }
-
-        return {
-          text: clean,
-          usage: res.usage,
-          meta: { model, provider: res.provider, assist, mode, policyRepaired },
-        };
-      } catch (err: any) {
-        throw new Error(`Chat failed: ${err?.message || err}`);
-      }
-    })
-  );
-
-  // Context providers
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.getContext', async ({ scope }) => {
-      if (scope === 'activeFile') {
-        const ed = vscode.window.activeTextEditor;
-        if (!ed) return { error: 'No active editor' };
-        const doc = ed.document;
-        return {
-          uri: doc.uri.toString(),
-          language: doc.languageId,
-          content: doc.getText().slice(0, 20000),
-        };
-      }
-
-      if (scope === 'selection') {
-        const ed = vscode.window.activeTextEditor;
-        if (!ed) return { error: 'No active editor' };
-        const sel = ed.selections?.[0];
-        if (!sel || sel.isEmpty) return { bytes: 0, content: '' };
-        const text = ed.document.getText(sel);
-        return { bytes: text.length, content: text.slice(0, 10000) };
-      }
-
-      if (scope === 'problems') {
-        const problems: any[] = [];
-        const diags = vscode.languages.getDiagnostics();
-        diags.forEach(([uri, list]) => {
-          const path = uri.fsPath;
-          (list || [])
-            .slice(0, 50)
-            .forEach((d) =>
-              problems.push({
-                path,
-                message: d.message,
-                severity: d.severity,
-                range: d.range,
-              })
-            );
-        });
-        return { count: problems.length, items: problems.slice(0, 200) };
-      }
-
-      if (scope === 'tests') {
-        return { summary: 'No test adapter connected.' };
-      }
-
-      return { error: 'Unknown scope' };
-    })
-  );
-
-  // Insert code into editor
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.insertCode', async ({ code, where }) => {
-      const ed =
-        vscode.window.activeTextEditor ||
-        (await vscode.window.showTextDocument(
-          await vscode.workspace.openTextDocument({ content: '' })
-        ));
-      await ed.edit((builder) => {
-        if (where === 'newFile') builder.insert(new vscode.Position(0, 0), code);
-        else if (ed.selections?.length)
-          ed.selections.forEach((sel) => builder.replace(sel, code));
-        else builder.insert(ed.selection.active, code);
-      });
-      vscode.window.showInformationMessage('Inserted AI suggestion.');
-    })
-  );
-
-  // Logging for research data
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.backend.feedback', async (payload: any) => {
-      try {
-        const logEntry = {
-          timestamp: new Date().toISOString(),
-          assistMode: payload.meta?.assist || 'unknown',
-          model: payload.meta?.model || 'unknown',
-          systemPrompt: payload.systemUsed,
-          userPrompt: payload.lastPrompt || 'N/A',
-          aiResponse: payload.lastResponse || 'N/A',
-          userRating: payload.value, 
-        };
-
-        const storageUri = context.globalStorageUri;
-        await vscode.workspace.fs.createDirectory(storageUri); 
-        const logFileUri = vscode.Uri.joinPath(storageUri, 'research_data_log.jsonl');
-
-        const encoded = new TextEncoder().encode(JSON.stringify(logEntry) + '\n');
-        const existingData = await vscode.workspace.fs.readFile(logFileUri).then(data => data, () => new Uint8Array());
-        
-        const combined = new Uint8Array(existingData.length + encoded.length);
-        combined.set(existingData);
-        combined.set(encoded, existingData.length);
-
-        await vscode.workspace.fs.writeFile(logFileUri, combined);
-      } catch (err) {
-        console.error('Failed to log research data:', err);
-      }
-    })
-  );
-
-  const quick = (action: string) => {
-    ChatPanel.createOrShow(context.extensionUri);
-    setTimeout(() => {
-      ChatPanel.postToWebview({ type: 'quickAction', payload: { action } });
-    }, 100);
-  };
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('vibelearner.quick.explain', () => quick('explain')),
-    vscode.commands.registerCommand('vibelearner.quick.review',  () => quick('review')),
-    vscode.commands.registerCommand('vibelearner.quick.plan',    () => quick('plan')),
-    vscode.commands.registerCommand('vibelearner.quick.hints',   () => quick('hints')),
-    vscode.commands.registerCommand('vibelearner.quick.reflect', () => quick('reflect')),
-    vscode.commands.registerCommand('vibelearner.quick.quiz',    () => quick('quiz')),
+    // Researcher utilities
+    vscode.commands.registerCommand('vibelearner.revealStudyLogs', async () => {
+      const file = logger.filePath;
+      const dir = vscode.Uri.joinPath(context.globalStorageUri, 'study_logs');
+      await vscode.workspace.fs.createDirectory(dir);
+      await logger.flush();
+      void vscode.commands.executeCommand('revealFileInOS', file ? vscode.Uri.file(file) : dir);
+    }),
   );
 }
 
 export function deactivate() {}
-
-// Prompts & Helpers
-
-function buildSystemPrompt(assist: string, mode: string) {
-  if (mode === 'quiz') {
-    return [
-      'Return ONLY a compact JSON quiz object:',
-      '{ "type":"quiz", "version":1, "title":"string",',
-      '  "questions":[ { "id":"q1", "stem":"string",',
-      '    "choices":[ {"id":"A","text":"..."},{"id":"B","text":"..."},{"id":"C","text":"..."},{"id":"D","text":"..."} ] } ] }',
-      'Do NOT include correct answers in this JSON.',
-      'No prose before or after the JSON.',
-    ].join(' ');
-  }
-  if (mode === 'quiz-eval') {
-    return [
-      'You will receive the quiz JSON plus qId and choiceId.',
-      'Respond ONLY with JSON: { "type":"quiz-eval","qId":"...","choiceId":"...","correct":true|false,"correctChoiceId":"A|B|C|D","feedback":"short explanation" }',
-      'No prose before or after the JSON.',
-    ].join(' ');
-  }
-
-  const base = [
-    'You are VibeLearner, a course-aware coding tutor.',
-    'Use a warm, concise, conversational tone.',
-    'Write as a single cohesive explanation (no section headers).',
-    'Begin with one focused guiding question, then explain the strategy simply.',
-    'Provide a tiny runnable example only if it helps.',
-    'Include one quick check-for-understanding and end with a brief reflection.',
-  ];
-
-  if (assist === 'Socratic') {
-    base.push(
-      'ROLE: You are a Socratic Coding Mentor. Your absolute goal is to lead the student to self-discovery.',
-      
-      'CRITICAL GUARDRAIL: Never fix the code for the student. Do not provide the corrected line (e.g., do not write `i < items.length`). Also do not give them the direct answer.',
-
-      'INSTRUCTIONAL STRATEGY:',
-      '1. SILENT ANALYSIS: Identify the bug internally, but do not state it directly to the user.',
-      '2. LEVEL 1 (Clarification): Ask the student to trace the very last iteration of their loop. Ask: "What is the specific value of i when the loop finishes?".',
-      '3. LEVEL 2 (Probing): If they are stuck, ask them to compare that value of i with the indices available in the array (0, 1, 2...).',
-      '4. ANALOGY USE: Use a non-coding analogy (like counting a 3-person line where the first person is #0) to explain zero-based indexing if they still dont see it.',
-
-      'RESTRICTION: Use at most ONE short question per response. Keep the student doing the thinking.'
-    );
-  } else if (assist === 'Hinted') {
-    base.push('Offer 2–3 actionable hints and a high-level plan. Keep answers short; no full solution unless asked.');
-  } else if (assist === 'Show-and-Tell') {
-    base.push('Walk through step-by-step with a micro example and a brief why-it-works.');
-  } else if (assist === 'Direct') {
-    base.push('Provide a clear solution first, then a short why/when to use it.');
-  }
-
-  return base.join(' ');
-}
-
-type ChatTurn = { role: 'user' | 'assistant'; text: string };
-
-function buildLearningPrompt({
-  userText,
-  assist,
-  objectives,
-  mode,
-  contextData,
-  history = []
-}: {
-  userText: string;
-  assist: string;
-  objectives: string[];
-  mode: string;
-  contextData: any;
-  history?: ChatTurn[];
-}) {
-  const parts: string[] = [];
-  const ctx = normalizeCtx(contextData);
-
-  parts.push(`Mode:${mode}; Assist:${assist}; Objectives:${objectives.join(' | ') || 'N/A'}`);
-
-  if (history?.length) {
-    const lines = history
-      .slice(0, 8)
-      .map(h => `${h.role === 'assistant' ? 'Tutor' : 'User'}: ${String(h.text).slice(0, 800)}`)
-      .join('\n');
-    parts.push(`Recent Chat (most recent first, truncated):\n${lines}`);
-  }
-
-  if (ctx.activeFile?.content) {
-    const skeleton = getFileSkeleton(ctx.activeFile.content);
-    parts.push(`File Structure:\n${skeleton}\n\nActive File (truncated):\n${ctx.activeFile.content.slice(0, 4000)}`);
-  }
-  if (ctx.selection?.content) parts.push(`Selection:\n${ctx.selection.content.slice(0, 6000)}`);
-  if (ctx.problems?.items?.length) parts.push(`Problems (top): ${JSON.stringify(ctx.problems.items.slice(0, 10))}`);
-  if (ctx.tests) parts.push(`Tests: ${JSON.stringify(ctx.tests)}`);
-
-  if (mode === 'quiz') {
-    parts.push(
-      'Create a 3-question multiple-choice quiz that is SPECIFIC to the most recent discussion and attached code/context.',
-      'OUTPUT: JSON only (as specified). No answers embedded.'
-    );
-    parts.push(`User:\n${userText || 'Generate quiz.'}`);
-  } else if (mode === 'quiz-eval') {
-    parts.push('Evaluate the selected choice. OUTPUT: JSON only (as specified).');
-    parts.push(`User:\n${userText}`);
-  } else {
-    const guidance = [
-      'Write a cohesive tutoring reply (no headings).',
-      '- If the user gave a statement/answer: first say right or wrong, then explain why in 1–3 sentences.',
-      '- For questions: begin with one focused guiding question, then explain the strategy simply.',
-      '- Ask one quick CFU.'
-    ].join('\n');
-    parts.push(guidance);
-    parts.push(`User:\n${userText}`);
-  }
-
-  return parts.join('\n\n');
-}
-
-function normalizeCtx(ctx: any) {
-  return {
-    activeFile: ctx.activeFile || ctx['activeFile'],
-    selection: ctx.selection || ctx['selection'],
-    problems: ctx.problems || ctx['problems'],
-    tests: ctx.tests || ctx['tests'],
-  };
-}
-
-function getFileSkeleton(content: string): string {
-  const lines = content.split('\n');
-  return lines
-    .filter(line => {
-      const trimmed = line.trim();
-      return (
-        trimmed.startsWith('import ') || 
-        trimmed.startsWith('export ') || 
-        trimmed.includes('class ') || 
-        trimmed.includes('function ') ||
-        trimmed.includes('interface ') ||
-        (trimmed.startsWith('public ') && trimmed.includes('('))
-      );
-    })
-    .join('\n');
-}

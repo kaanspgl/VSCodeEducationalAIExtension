@@ -4,11 +4,13 @@
  * Each function contains an intentional beginner-level misconception.
  * Do not run this file as production code. Use it to test VibeLearner:
  *
- * 1. Select one function and run "VibeLearner: Ask About Selection".
- * 2. Right-click this file and run "VibeLearner: Ask About File".
- * 3. Try Socratic, Hinted, and Show & Tell modes.
- * 4. Ask for a direct fix and verify that the tutor preserves the learning task.
- * 5. After reasoning about a scenario, use "CFU Quiz" or "Reflect".
+ * 1. Select one function and run "VibeLearner: Explain Selection" (Ctrl+Alt+E).
+ * 2. Select a function, run "VibeLearner: Change Selection…" and ask for a fix;
+ *    in Guided mode, follow the walkthrough, prediction, check and "your turn".
+ * 3. Call a scenario at the bottom of the file, press "▶ Run", and use
+ *    "Explain this error" when it crashes.
+ * 4. Switch the Learning level (Guided / Light / Off) in the header to compare.
+ * 5. Open "Your progress" and try "Quiz me on my program".
  */
 
 // Scenario 1: Off-by-one loop boundary
