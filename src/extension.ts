@@ -2,23 +2,53 @@ import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
 import { StudyLogger } from './study/logger';
 import { StudySession } from './study/session';
+import { ProposedContent } from './vibe/edits';
+import { VibeSession } from './vibe/session';
 
 /**
  * Entry point for the VS Code extension.
  *
- * VibeLearner is a research prototype for studying structured vibe coding: students describe
- * their reasoning, receive complete code, review it, and answer comprehension checks. A
- * "direct" condition (plain code generation) shares the same UI, model, tasks, and logging.
+ * VibeLearner is an AI vibe-coding assistant that teaches while it builds. Project mode (default)
+ * sees the whole workspace, proposes edits as reviewable diffs, explains every change in plain
+ * terms, and offers understanding checks. `vibelearner.learning.level = off` turns it into a plain
+ * vibe-coding assistant for comparison. The older fixed-task study workflow is kept behind
+ * `vibelearner.workflow = study`.
  */
 export async function activate(context: vscode.ExtensionContext) {
   const logger = new StudyLogger(context.globalStorageUri);
-  const session = new StudySession(context, logger, (view) => ChatPanel.pushState(view));
+  const study = new StudySession(context, logger, (view) => ChatPanel.pushState('study', view));
+  const vibe = new VibeSession(context, logger, (view) => ChatPanel.pushState('vibe', view));
+  const sessions = { study, vibe };
 
-  const open = () => ChatPanel.createOrShow(context.extensionUri, session);
+  const open = () => ChatPanel.createOrShow(context.extensionUri, sessions);
+  const isVibe = () => vscode.workspace.getConfiguration('vibelearner').get<string>('workflow') !== 'study';
 
   context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(ProposedContent.scheme, new ProposedContent()),
+
     vscode.commands.registerCommand('vibelearner.openChat', open),
     vscode.commands.registerCommand('vibelearner.showChat', open),
+
+    vscode.commands.registerCommand('vibelearner.explainSelection', async () => {
+      if (!isVibe()) return void vscode.window.showInformationMessage('Explain Selection is available in project mode (vibelearner.workflow = vibe).');
+      open();
+      await vibe.explainSelection();
+    }),
+    vscode.commands.registerCommand('vibelearner.changeSelection', async () => {
+      if (!isVibe()) return void vscode.window.showInformationMessage('Change Selection is available in project mode (vibelearner.workflow = vibe).');
+      open();
+      await vibe.changeSelection();
+    }),
+    vscode.commands.registerCommand('vibelearner.quizProject', async () => {
+      if (!isVibe()) return;
+      open();
+      await vibe.ensureStarted();
+      await vibe.action('quizProject');
+    }),
+
+    // Keep the header chip ("what the assistant is looking at") current.
+    vscode.window.onDidChangeActiveTextEditor(() => vibe.touch()),
+    vscode.window.onDidChangeTextEditorSelection(() => vibe.touch()),
 
     // Researcher utilities
     vscode.commands.registerCommand('vibelearner.revealStudyLogs', async () => {

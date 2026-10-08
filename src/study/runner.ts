@@ -153,10 +153,19 @@ export function interpreterFor(language: string): { cmd: string; env: NodeJS.Pro
 }
 
 /** Runs a whole program with the given stdin and returns what it actually printed. */
-export function runProgram(language: string, code: string, stdin: string): Promise<ProgramRun> {
+export async function runProgram(language: string, code: string, stdin: string): Promise<ProgramRun> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vibelearner-run-'));
   const file = path.join(dir, language === 'javascript' ? 'program.js' : 'program.py');
   fs.writeFileSync(file, code, 'utf8');
+  try {
+    return await runFile(language, file, stdin);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Runs a real project file from its own folder (so local imports work) and captures its output. */
+export function runFile(language: string, filePath: string, stdin: string): Promise<ProgramRun> {
   const { cmd, env } = interpreterFor(language);
   const cap = (s: string) => (s.length > 4000 ? s.slice(0, 4000) + '\n...(truncated)' : s);
 
@@ -165,10 +174,9 @@ export function runProgram(language: string, code: string, stdin: string): Promi
     const done = (r: ProgramRun) => {
       if (settled) return;
       settled = true;
-      fs.rmSync(dir, { recursive: true, force: true });
       resolve(r);
     };
-    const child = cp.spawn(cmd, [file], { env, windowsHide: true });
+    const child = cp.spawn(cmd, [filePath], { env, cwd: path.dirname(filePath), windowsHide: true });
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, 8000);
     child.stdout.on('data', d => { stdout += d; });
     child.stderr.on('data', d => { stderr += d; });
@@ -178,6 +186,10 @@ export function runProgram(language: string, code: string, stdin: string): Promi
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      // Windows ships a "python" alias that only opens the Microsoft Store.
+      if (language === 'python' && (code === 9009 || /Python was not found|Microsoft Store/i.test(stderr))) {
+        return done({ ok: false, stdout: '', stderr: '', timedOut: false, error: 'Python is not installed (the "python" command only opens the Microsoft Store). Install it from python.org or set vibelearner.pythonPath.' });
+      }
       done({ ok: code === 0 && !timedOut, stdout: cap(stdout), stderr: cap(stderr), timedOut });
     });
     child.stdin.on('error', () => { /* program ended before reading stdin */ });
