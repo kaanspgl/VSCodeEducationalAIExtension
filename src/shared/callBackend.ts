@@ -21,6 +21,25 @@ type CallResult = {
   ms: number;
 };
 
+export async function checkOllamaConnection(): Promise<{ models: string[] }> {
+  const res = await fetch(`${ollamaBaseUrl()}/api/tags`);
+  if (!res.ok) {
+    throw new Error(`Ollama returned ${res.status} ${res.statusText}`);
+  }
+
+  const data: any = await res.json();
+  return {
+    models: Array.isArray(data?.models)
+      ? data.models.map((item: any) => String(item?.name || item?.model || '')).filter(Boolean)
+      : []
+  };
+}
+
+function ollamaBaseUrl(): string {
+  const cfg = vscode.workspace.getConfiguration('vibelearner');
+  return String(cfg.get('ollamaUrl') ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
+}
+
 export async function callBackend(args: CallArgs): Promise<CallResult> {
   const started = Date.now();
   const res = await route(args);
@@ -117,7 +136,8 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
   // -------------------------------------------------------------
   // ROUTE 3: Ollama (Default)
   // -------------------------------------------------------------
-  const endpoint = (cfg.get('endpoint') as string) || 'http://127.0.0.1:11434/api/chat';
+  const configuredEndpoint = String(cfg.get('endpoint') ?? '').trim();
+  const endpoint = configuredEndpoint || `${ollamaBaseUrl()}/api/chat`;
 
   const messages = [
     ...(args.system ? [{ role: 'system', content: args.system }] : []),
@@ -139,7 +159,10 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
       body: JSON.stringify(body),
     });
 
-    if (!res.ok) throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`Ollama Error: ${res.status} ${res.statusText}${detail ? ` - ${detail}` : ''}`);
+    }
 
     const data: any = await res.json();
     const text = data?.message?.content || data?.response || '';

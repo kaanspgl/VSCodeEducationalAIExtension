@@ -51,11 +51,28 @@ When a participant code is entered, the level comes from settings and can't be c
 * Python 3, if you want to run Python programs. JavaScript runs on VS Code's built-in Node. On Windows, the `python` command that opens the Microsoft Store is detected and reported.
 
 **Run it**
-```bash
-npm install
-npm run compile
+1. Install and test:
+   ```bash
+   npm ci
+   ```
+   ```bash
+   npm test
+   ```
+2. In VS Code, choose **Run VibeLearner Extension** from Run and Debug, or press **F5**.
+3. In the Extension Development Host, run **VibeLearner: Check Ollama Connection**. It confirms that Ollama is running and that your configured model is installed.
+4. Open a folder (**File → Open Folder**) and run **VibeLearner: Open** (Ctrl+Alt+;).
+
+For a quick feature test, open `examples/learning-playground.js`. Each function has an intentional beginner misconception, so it works well for *Explain Selection*, *Change Selection…* and **Explain this error**.
+
+The default local configuration is:
+
+```json
+{
+  "vibelearner.apiProvider": "ollama",
+  "vibelearner.ollamaUrl": "http://127.0.0.1:11434",
+  "vibelearner.model": "qwen3-coder:30b"
+}
 ```
-Then press **F5** (*Run VibeLearner Extension*). In the new window, open a folder (**File → Open Folder**) and run **VibeLearner: Open** (Ctrl+Alt+;).
 
 ## Settings
 

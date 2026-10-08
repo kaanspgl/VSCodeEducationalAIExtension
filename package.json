@@ -37,6 +37,10 @@
         "title": "VibeLearner: Quiz Me on My Program"
       },
       {
+        "command": "vibelearner.checkOllama",
+        "title": "VibeLearner: Check Ollama Connection"
+      },
+      {
         "command": "vibelearner.setGeminiKey",
         "title": "VibeLearner: Set Gemini API Key"
       },
@@ -75,8 +79,8 @@
         },
         "vibelearner.endpoint": {
           "type": "string",
-          "default": "http://127.0.0.1:11434/api/chat",
-          "description": "HTTP endpoint. For Ollama use: http://127.0.0.1:11434/api/chat"
+          "default": "",
+          "description": "Optional full chat endpoint override. Leave blank to use ollamaUrl + /api/chat."
         },
         "vibelearner.openaiApiKey": {
           "type": "string",
@@ -274,7 +278,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "echo \"no tests yet\""
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

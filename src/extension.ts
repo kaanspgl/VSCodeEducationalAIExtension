@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './panels/ChatPanel';
+import { checkOllamaConnection } from './shared/callBackend';
 import { StudyLogger } from './study/logger';
 import { StudySession } from './study/session';
 import { ProposedContent } from './vibe/edits';
@@ -49,6 +50,21 @@ export async function activate(context: vscode.ExtensionContext) {
     // Keep the header chip ("what the assistant is looking at") current.
     vscode.window.onDidChangeActiveTextEditor(() => vibe.touch()),
     vscode.window.onDidChangeTextEditorSelection(() => vibe.touch()),
+
+    vscode.commands.registerCommand('vibelearner.checkOllama', async () => {
+      try {
+        const { models } = await checkOllamaConnection();
+        const configuredModel = vscode.workspace.getConfiguration('vibelearner').get<string>('model') || 'qwen3-coder:30b';
+        const available = models.includes(configuredModel);
+        const detail = models.length ? models.join(', ') : 'no models reported';
+        const message = available
+          ? `Ollama is ready. ${configuredModel} is installed.`
+          : `Ollama is running, but ${configuredModel} is not installed. Available: ${detail}`;
+        (available ? vscode.window.showInformationMessage : vscode.window.showWarningMessage)(message);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`VibeLearner: ${err?.message || err}`);
+      }
+    }),
 
     // Stores the Gemini key in the OS keychain (SecretStorage) instead of plain-text settings.
     vscode.commands.registerCommand('vibelearner.setGeminiKey', async () => {
