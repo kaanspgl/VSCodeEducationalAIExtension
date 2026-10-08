@@ -50,6 +50,15 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.window.onDidChangeActiveTextEditor(() => vibe.touch()),
     vscode.window.onDidChangeTextEditorSelection(() => vibe.touch()),
 
+    // Stores the Gemini key in the OS keychain (SecretStorage) instead of plain-text settings.
+    vscode.commands.registerCommand('vibelearner.setGeminiKey', async () => {
+      const key = await vscode.window.showInputBox({ prompt: 'Gemini API key (stored in your OS keychain)', password: true, ignoreFocusOut: true });
+      if (key === undefined) return;
+      if (key.trim()) await context.secrets.store('gemini_api_key', key.trim());
+      else await context.secrets.delete('gemini_api_key');
+      void vscode.window.showInformationMessage(key.trim() ? 'Gemini API key saved securely.' : 'Gemini API key removed.');
+    }),
+
     // Researcher utilities
     vscode.commands.registerCommand('vibelearner.revealStudyLogs', async () => {
       const file = logger.filePath;

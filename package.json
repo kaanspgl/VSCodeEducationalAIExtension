@@ -37,6 +37,10 @@
         "title": "VibeLearner: Quiz Me on My Program"
       },
       {
+        "command": "vibelearner.setGeminiKey",
+        "title": "VibeLearner: Set Gemini API Key"
+      },
+      {
         "command": "vibelearner.revealStudyLogs",
         "title": "VibeLearner: Reveal Study Logs (researcher)"
       }
