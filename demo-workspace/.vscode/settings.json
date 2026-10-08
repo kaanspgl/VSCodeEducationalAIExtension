@@ -1,0 +1,11 @@
+{
+  // Settings used only while demoing VibeLearner in this folder.
+  // qwen2.5-coder:7b runs on a typical laptop (~5 GB). With 32 GB+ RAM,
+  // switch to "qwen3-coder:30b" for better answers.
+  "vibelearner.apiProvider": "ollama",
+  "vibelearner.ollamaUrl": "http://127.0.0.1:11434",
+  "vibelearner.model": "qwen2.5-coder:7b",
+  "vibelearner.workflow": "vibe",
+  "vibelearner.learning.level": "guided",
+  "vibelearner.context.maxChars": 12000
+}

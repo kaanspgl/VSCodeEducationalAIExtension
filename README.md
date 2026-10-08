@@ -43,6 +43,8 @@ Pick a level on the Start screen or from the **Learning** dropdown in the header
 
 When a participant code is entered, the level comes from settings and can't be changed in the UI.
 
+> **Showing this to someone?** See [DEMO.md](DEMO.md) for one-command setup and a 5-minute demo script.
+
 ## Getting Started
 
 **Requirements**
