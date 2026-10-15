@@ -210,11 +210,11 @@
 
   // ================================================================ project mode (vibe)
   let progressOpen = false;
-  const STAGE_ICON = { tour: '🧭', predict: '🔮', check: '✅', challenge: '🛠' };
+  const STAGE_ICON = { predict: '🔮', tour: '🧭', check: '🔍', challenge: '🛠' };
   const LEVELS = [
-    { v: 'guided', label: 'Guided', desc: 'I walk you through every change: plan, walkthrough, predict, check, your turn. Best for learning.' },
-    { v: 'light', label: 'Light', desc: 'Learning tools are on each change whenever you want them; nothing starts on its own.' },
-    { v: 'off', label: 'Off', desc: 'Just coding, no teaching extras.' },
+    { v: 'guided', label: 'Structured', desc: 'Explain the idea and write the steps before the AI codes, then predict, run, investigate and modify its code. Best for learning.' },
+    { v: 'light', label: 'Light', desc: 'The learning tools are on each change whenever you want them; nothing is required.' },
+    { v: 'off', label: 'Regular vibe coding', desc: 'The AI writes code straight from your request.' },
   ];
 
   function vibeHtml() {
@@ -264,13 +264,14 @@
         ${view.project ? `<span class="badge projchip" title="Working only inside this folder">📂 ${esc(view.project)}/ <button class="linkbtn" data-cmd="leaveProject" title="Leave project (see the whole workspace)">✕</button></span>` : ''}
         ${chip}
         <div class="grow"></div>
-        <label class="levelpick" title="${view.levelLocked ? 'Fixed for this research session' : 'How much learning support to add'}">Learning
+        <label class="levelpick" title="${view.levelLocked ? 'Fixed for this research session' : 'Structured or regular vibe coding'}">Mode
           <select id="level" ${view.levelLocked ? 'disabled' : ''}>${LEVELS.map(l => `<option value="${l.v}" ${view.level === l.v ? 'selected' : ''}>${l.label}</option>`).join('')}</select>
         </label>
         ${view.logging ? `<span class="badge" title="Research logging is on">● ${esc(view.participant)}</span>` : ''}
       </header>
       ${progress}
       <main class="main">
+        ${structuredBar()}
         ${plan}
         <div id="log" class="scroll" role="log" aria-live="polite">${msgs}${busy}</div>
         ${tour}
@@ -296,6 +297,20 @@
           </div>
         </div>
       </main>`;
+  }
+
+  function structuredBar() {
+    const st = view.structured;
+    if (!st) return '';
+    const steps = ['Explain the idea', 'Write the steps', 'Read the code'];
+    const primm = { accept: 'accept the code', predict: 'predict & run', tour: 'investigate', check: 'investigate', challenge: 'modify' };
+    const sub = st.step === 3 ? (primm[st.primm] || '') : '';
+    return `<div class="stepbar" title="Structured vibe coding">${steps.map((label, i) => {
+      const n = i + 1;
+      const cls = n < st.step ? 'done' : n === st.step ? 'now' : '';
+      const extra = n === 3 && n === st.step && sub ? ` <span class="muted">· ${esc(sub)}</span>` : '';
+      return `<span class="sb ${cls}">${n < st.step ? '✓' : n}. ${label}${extra}</span>`;
+    }).join('<span class="sbarrow">→</span>')}</div>`;
   }
 
   function progressHtml() {
@@ -366,7 +381,7 @@
         <p class="muted">Vibe coding that teaches. Describe what you want and VibeLearner builds it in your project, then helps you understand it: thinking it through, walking through the code, predicting what it does, and trying changes yourself.</p>
         ${view.hasFolder ? '' : '<p class="warn">Open a folder first (File → Open Folder) so I can see your program.</p>'}
         <div id="levelBox" class="levelbox">
-          <div class="hint">How much should I teach while we code?</div>
+          <div class="hint">How do you want to vibe code?</div>
           ${LEVELS.map(l => `<label class="levelopt"><input type="radio" name="lvl" value="${l.v}" ${(view.level || 'guided') === l.v ? 'checked' : ''}><span><b>${l.label}</b> — ${esc(l.desc)}</span></label>`).join('')}
           <div class="hint">You can change this any time from the header.</div>
         </div>

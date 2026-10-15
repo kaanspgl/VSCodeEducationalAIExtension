@@ -151,3 +151,10 @@ textarea:disabled{ opacity:.6; }
 .levelbox{ display:flex; flex-direction:column; gap:6px; border:1px solid var(--border); border-radius:10px; padding:10px; }
 .levelopt{ display:flex; gap:8px; align-items:flex-start; cursor:pointer; font-size:12.5px; }
 .levelopt input{ margin-top:3px; }
+
+/* structured vibe coding: 1-2-3 bar */
+.stepbar{ display:flex; flex-wrap:wrap; align-items:center; gap:4px; font-size:12px; }
+.stepbar .sb{ padding:2px 9px; border-radius:999px; border:1px solid var(--border); color:var(--muted); }
+.stepbar .sb.now{ color:var(--text); border-color:var(--accent); background:color-mix(in srgb, var(--accent) 14%, transparent); font-weight:600; }
+.stepbar .sb.done{ color:var(--ok); border-color:color-mix(in srgb, var(--ok) 55%, var(--border)); }
+.stepbar .sbarrow{ color:var(--muted); }

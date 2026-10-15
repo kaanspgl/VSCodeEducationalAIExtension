@@ -22,6 +22,7 @@ export type StudyEventType =
   | 'vibe_error'
   | 'vibe_plan'
   | 'vibe_learn'
+  | 'vibe_gate'
   | 'quiz_question'
   | 'quiz_response'
   | 'review_question'

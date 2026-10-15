@@ -149,7 +149,9 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
     model,
     messages,
     stream: false,
-    options: { temperature },
+    // Ollama defaults to a 4096-token window and silently drops the start of longer prompts (our
+    // instructions). Keep this fixed across calls: changing it makes Ollama reload the model.
+    options: { temperature, num_ctx: cfg.get<number>('ollamaContextLength') ?? 16384 },
   };
 
   try {

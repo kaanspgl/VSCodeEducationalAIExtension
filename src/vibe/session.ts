@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { callBackend, ChatMsg } from '../shared/callBackend';
 import { StudyLogger } from '../study/logger';
 import { extractJson, stripThinking } from '../study/prompts';
-import { interpreterFor, runFile } from '../study/runner';
+import { interpreterFor, runFile, runProgram } from '../study/runner';
 import { buildContext, listFiles, numbered, ProjectContext, quickInfo } from './context';
 import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, parseBlocks, ProposedContent } from './edits';
 import * as P from './prompts';
@@ -11,8 +11,9 @@ import * as P from './prompts';
 type Level = P.Level;
 type Stage = 'tour' | 'predict' | 'check' | 'challenge';
 type StageStatus = 'todo' | 'active' | 'done' | 'skipped' | 'na';
-const STAGES: Stage[] = ['tour', 'predict', 'check', 'challenge'];
-const STAGE_LABEL: Record<Stage, string> = { tour: 'Walk through', predict: 'Predict & run', check: 'Check', challenge: 'Your turn' };
+// Step 3 follows PRIMM: predict and run first, then investigate (walkthrough + questions), then modify.
+const STAGES: Stage[] = ['predict', 'tour', 'check', 'challenge'];
+const STAGE_LABEL: Record<Stage, string> = { predict: 'Predict & run', tour: 'Walk through', check: 'Questions', challenge: 'Modify' };
 const INPUT_RE = /\binput\s*\(|sys\.stdin|readline|process\.stdin|prompt\s*\(/;
 
 export type VibeChange = {
@@ -51,6 +52,8 @@ export type VibeView = {
   placeholder: string;
   draft?: string;
   quiz?: { label: string; index: number; total: number; stem: string; choices: string[] };
+  /** Structured vibe coding progress for the current request: 1 explain the idea, 2 write the steps, 3 read the code. */
+  structured?: { step: 1 | 2 | 3; primm?: string };
   tour?: { index: number; total: number; title: string; text: string; path: string; start: number; end: number; pending: boolean };
   plan?: { goal: string; steps: { title: string; status: string }[]; next?: { index: number; title: string }; remaining: number };
   concepts: { name: string; seen: number; right: number; total: number }[];
@@ -75,6 +78,10 @@ type Proposal = {
   card: VibeChange;
   planStep?: number;
   planAll?: boolean;
+  /** Part of structured vibe coding: Step 3 (PRIMM) runs on it automatically in guided mode. */
+  structured: boolean;
+  idea?: string;
+  steps?: string;
   viewedDiff: boolean;
   toured: boolean;
   learn: Record<Stage, StageStatus>;
@@ -86,13 +93,31 @@ type Plan = {
   goal: string;
   steps: { title: string; detail: string; status: 'todo' | 'doing' | 'done' }[];
   request: string;
-  think?: { question: string; answer?: string; msgId: number };
 };
 
-type Mcq = { stem: string; choices: string[]; correct: number; explanation: string; concept?: string };
+type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean };
+
+/** Steps 1 and 2 of structured vibe coding, before any code is written. */
+type Gate = {
+  request: string;
+  opts: ActOpts;
+  step: 1 | 2;
+  rounds: number;
+  turns: { role: 'student' | 'tutor'; text: string }[];
+  ideaParts: string[];
+  idea: string;
+  steps: string;
+  keyIdeas: string[];
+  scaffolded: { idea: boolean; steps: boolean };
+  stepsNote?: string;
+  msgIds: number[];
+};
+
+type Edit = { find?: string; replace?: string };
+type Mcq = { stem: string; choices: string[]; correct: number; explanation: string; concept?: string; change?: Edit };
 type QuizState = { kind: 'change' | 'project'; items: Mcq[]; index: number; right: number; changeId?: string; fallbackConcepts: string[] };
 type Awaiting =
-  | { kind: 'think' }
+  | { kind: 'gate' }
   | { kind: 'predict'; id: string; truth: string; stdin: string; msgId: number };
 type Tour = {
   id: string;
@@ -117,7 +142,12 @@ export class VibeSession {
   private model = '';
   private projectDir: string | undefined;
   private target = 'auto';
-  private lastRequest: { text: string; opts: { planStep?: number; planAll?: boolean } } | undefined;
+  private lastRequest: { text: string; opts: ActOpts; student?: { idea?: string; steps?: string } } | undefined;
+  private maxRoundsPerStep = 3;
+  private allowSkipSteps = true;
+  private gate: Gate | undefined;
+  /** The structured change the 1-2-3 bar follows; cleared when a new request starts. */
+  private currentStructured: string | undefined;
 
   private history: ChatMsg[] = [];
   private clarRound = 0;
@@ -129,7 +159,7 @@ export class VibeSession {
   private awaiting: Awaiting | undefined;
   private askedQuiz: string[] = [];
   private errors: { path: string; err: string }[] = [];
-  private stats = { prompts: [] as number[], accepted: 0, reviewed: 0, predRight: 0, predTotal: 0, checkRight: 0, checkTotal: 0, chDone: 0, chGiven: 0 };
+  private stats = { prompts: [] as number[], accepted: 0, reviewed: 0, predRight: 0, predTotal: 0, checkRight: 0, checkTotal: 0, chDone: 0, chGiven: 0, gates: 0, gatesUnaided: 0 };
   private terminal: vscode.Terminal | undefined;
   private touchTimer: NodeJS.Timeout | undefined;
   private deco: vscode.TextEditorDecorationType | undefined;
@@ -166,6 +196,8 @@ export class VibeSession {
     this.projectQuizCount = clamp(cfg.get<number>('learning.projectQuizQuestions') ?? 3, 1, 6);
     this.maxChars = clamp(cfg.get<number>('context.maxChars') ?? 24000, 4000, 200000);
     this.model = cfg.get<string>('model') || cfg.get<string>('defaultModel') || 'qwen3-coder:30b';
+    this.maxRoundsPerStep = clamp(cfg.get<number>('learning.maxRoundsPerStep') ?? 3, 1, 8);
+    this.allowSkipSteps = cfg.get<boolean>('learning.allowSkipSteps') ?? true;
 
     const code = (participant ?? '').trim();
     // The Start-screen picker applies only outside research sessions; study conditions come from settings.
@@ -178,7 +210,8 @@ export class VibeSession {
       this.view.participant = code;
       this.logger.log('vibe_session', undefined, {
         promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: cfg.get('apiProvider'), temperature: cfg.get('temperature'),
-        level: this.level, clarify: this.clarify, maxClarifications: this.maxClarifications, questionsPerChange: this.perChange,
+        level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
+        maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, questionsPerChange: this.perChange,
         projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
       });
     }
@@ -189,11 +222,18 @@ export class VibeSession {
       this.say('tutor', '⚠️ No folder is open. Use **File → Open Folder** so I can see (and create) your program\'s files, then reopen this panel.');
     } else if (this.level === 'off') {
       this.say('tutor', 'Hi! I can see your whole project. Ask me to build something, change or fix code, or explain how something works.');
+    } else if (this.level === 'guided') {
+      this.say('tutor',
+        'Hi! I\'m your vibe-coding partner. Tell me what you want to build, change or fix. I can see your whole project, and if you select code first I\'ll focus on that.\n\n' +
+        'Before I write code, we\'ll go through three steps:\n' +
+        '1. **Explain the idea**: what the program needs to do, in a sentence or two.\n' +
+        '2. **Write the steps**: every step, in your own words. No code needed.\n' +
+        '3. **Read the code**: I write it from your steps, then you predict what it does, run it, investigate how it works, and change it.\n\n' +
+        'You keep the thinking; I do the typing.');
     } else {
       this.say('tutor',
         'Hi! I\'m your vibe-coding partner. Tell me what you want to build, change, fix or understand. I can see your whole project, and if you select code first I\'ll focus on that.\n\n' +
-        'I\'ll write the code, and along the way I\'ll help you **think it through, walk through it, predict what it does, and try changes yourself**. That\'s how you learn from vibe coding instead of just copying.' +
-        (this.level === 'guided' ? ' Every step can be skipped.' : ''));
+        'Each change comes with learning tools (predict & run, walk through, questions, modify) that you can use whenever you like.');
     }
     await this.touchNow();
   }
@@ -211,9 +251,10 @@ export class VibeSession {
     if (!text || this.view.busy || this.view.stage !== 'chat' || this.quiz) return;
 
     if (this.awaiting?.kind === 'predict') return this.guard(() => this.handlePrediction(text));
-    if (this.awaiting?.kind === 'think') return this.guard(() => this.handleThink(text));
+    if (this.awaiting?.kind === 'gate') return this.guard(() => this.handleGate(text));
 
     const snapshot = { msgs: this.view.messages.length, hist: this.history.length, round: this.clarRound };
+    this.currentStructured = undefined;
     this.setBusy(true, 'Reading your project…');
     let ctx: ProjectContext;
     try {
@@ -234,11 +275,11 @@ export class VibeSession {
       if (this.level !== 'off') {
         this.setBusy(true, 'Thinking…');
         const listing = this.listing(ctx);
-        const route = await this.askJson<{ intent: string; size?: string; detail: string; reply?: string; prompt_review?: any }>(
+        const route = await this.askJson<{ intent: string; size?: string; logic?: boolean; detail: string; reply?: string; prompt_review?: any }>(
           P.ROUTER_SYSTEM, P.routerPrompt(listing, text, this.clarRound + 1, this.maxClarifications, this.plan ? P.planText(this.plan, undefined, false) : undefined),
           v => typeof v.detail === 'string', this.recentHistory()
         );
-        this.logger.log('vibe_route', undefined, { intent: route?.intent, size: route?.size, detail: route?.detail, reply: route?.reply, promptReview: route?.prompt_review, round: this.clarRound });
+        this.logger.log('vibe_route', undefined, { intent: route?.intent, size: route?.size, logic: route?.logic, detail: route?.detail, reply: route?.reply, promptReview: route?.prompt_review, round: this.clarRound });
 
         // Prompt coach: feedback on the request as a vibe-coding prompt.
         const pr = route?.prompt_review;
@@ -262,6 +303,12 @@ export class VibeSession {
           const planned = await this.makePlan(text, ctx);
           if (planned) return this.refresh();
         }
+        // Structured vibe coding: requests that need programming logic go through Steps 1 and 2 first.
+        const needsLogic = route ? ['build', 'edit', 'debug'].includes(route.intent) && route.logic !== false : false;
+        if (this.level === 'guided' && needsLogic) {
+          await this.startGate(text, { structured: true });
+          return this.refresh();
+        }
       }
       this.clarRound = 0;
       await this.act(text, ctx, {});
@@ -282,14 +329,13 @@ export class VibeSession {
       (ctx.selection ? `\n\nSTUDENT SELECTION (${ctx.selection.path} lines ${ctx.selection.startLine}-${ctx.selection.endLine}):\n${ctx.selection.text}` : '');
   }
 
-  private async act(request: string, ctx: ProjectContext, opts: { planStep?: number; planAll?: boolean }) {
-    this.lastRequest = { text: request, opts };
+  private async act(request: string, ctx: ProjectContext, opts: ActOpts, student?: { idea?: string; steps?: string }) {
+    this.lastRequest = { text: request, opts, student };
     this.setBusy(true, opts.planStep !== undefined ? `Building step ${opts.planStep + 1}…` : 'Working on it…');
     const pText = this.plan && opts.planStep !== undefined ? P.planText(this.plan, opts.planStep, !!opts.planAll) : undefined;
-    const idea = this.plan?.think?.answer;
     const res = await callBackend({
       model: this.model, system: P.actionSystem(this.level),
-      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join('\n\n'), pText, idea),
+      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join('\n\n'), pText, student?.idea, student?.steps),
       history: this.recentHistory(), context: this.context,
     });
     this.setBusy(false);
@@ -314,7 +360,7 @@ export class VibeSession {
     this.history.push({ role: 'user', content: request }, { role: 'assistant', content: shown.slice(0, 1500) });
 
     blocks = await this.repairIfNeeded(blocks, request);
-    const cards = await this.makeProposals(blocks, request, concepts, ctx, opts);
+    const cards = await this.makeProposals(blocks, request, concepts, ctx, opts, student);
     if (!blocks.length) concepts.forEach(c => this.bumpSeen(c));
 
     this.logger.log('vibe_reply', undefined, {
@@ -322,8 +368,10 @@ export class VibeSession {
       changes: cards.map(c => ({ id: c.id, path: c.path, status: c.status, added: c.added, removed: c.removed, isNew: c.isNew })),
     }, res.ms);
 
-    const hint = cards.some(c => c.status === 'pending') && this.level === 'guided'
-      ? '\n\n_Let\'s walk through it before you accept it._' : '';
+    const hint = cards.some(c => c.status === 'pending') && this.level === 'guided' && opts.structured
+      ? '\n\n**Step 3: Read the code.** ' + (student?.steps ? 'I wrote it from your steps. ' : '') +
+        'Press **Accept** to add it to your project. Then we\'ll read it the PRIMM way: **predict** what it prints, **run** it, **investigate** how it works, and **modify** it.'
+      : '';
     this.view.messages.push({
       id: ++this.msgSeq, role: 'tutor',
       text: (shown || (blocks.length ? 'Here are the changes:' : '(no reply)')) + hint,
@@ -339,11 +387,9 @@ export class VibeSession {
       this.plan.steps.forEach(s => { if (s.status === 'doing') s.status = 'todo'; });
     }
 
-    const first = cards.find(c => c.status === 'pending');
-    if (first && this.level === 'guided') await this.startStage(first.id, 'tour');
   }
 
-  private async makeProposals(blocks: EditBlock[], request: string, concepts: string[], ctx: ProjectContext, opts: { planStep?: number; planAll?: boolean }): Promise<VibeChange[]> {
+  private async makeProposals(blocks: EditBlock[], request: string, concepts: string[], ctx: ProjectContext, opts: ActOpts, student?: { idea?: string; steps?: string }): Promise<VibeChange[]> {
     const folder = ctx.folder;
     if (!blocks.length) return [];
     if (!folder) {
@@ -365,9 +411,11 @@ export class VibeSession {
       };
       cards.push(card);
       if (r.applied) {
+        if (opts.structured && !this.currentStructured) this.currentStructured = card.id;
         this.proposals.set(card.id, {
           id: card.id, path: p, blocks: bs, oldContent: old, newContent: r.content, request, concepts, card,
-          planStep: opts.planStep, planAll: opts.planAll, viewedDiff: false, toured: false,
+          planStep: opts.planStep, planAll: opts.planAll, structured: !!opts.structured, idea: student?.idea, steps: student?.steps,
+          viewedDiff: false, toured: false,
           learn: { tour: 'todo', predict: /\.(py|js)$/.test(p) ? 'todo' : 'na', check: 'todo', challenge: 'todo' },
         });
       }
@@ -379,7 +427,7 @@ export class VibeSession {
 
   private async makePlan(request: string, ctx: ProjectContext): Promise<boolean> {
     this.setBusy(true, 'Planning the steps…');
-    const res = await this.askJson<{ goal: string; steps: { title: string; detail: string }[]; think_question?: string }>(
+    const res = await this.askJson<{ goal: string; steps: { title: string; detail: string }[] }>(
       P.PLAN_SYSTEM, P.planPrompt(this.listing(ctx), request),
       v => Array.isArray(v.steps) && v.steps.length >= 2 && v.steps.every(s => typeof s?.title === 'string'), this.recentHistory()
     );
@@ -390,32 +438,151 @@ export class VibeSession {
     this.plan = { goal: stripThinking(String(res.goal || request)), steps, request };
     const list = steps.map((s, i) => `${i + 1}. **${s.title}** — ${s.detail}`).join('\n');
     this.history.push({ role: 'user', content: request }, { role: 'assistant', content: `Plan:\n${list}` });
-    this.logger.log('vibe_plan', undefined, { goal: this.plan.goal, steps: steps.map(s => s.title), thinkQuestion: res.think_question });
+    this.logger.log('vibe_plan', undefined, { goal: this.plan.goal, steps: steps.map(s => s.title) });
 
-    const intro = `Let's build this in **${steps.length} small steps** — that's how experienced vibe coders work: build a little, check it runs, then add more.\n\n${list}`;
-    const q = res.think_question ? stripThinking(res.think_question) : '';
-    if (q) {
-      const msg = this.say('tutor', `${intro}\n\n**Before I write step 1, have a think:** ${q}\n\n_Type your idea below — a sentence in plain words is plenty. I'll build it your way if it works._`, [
-        { label: 'Skip — build step 1', cmd: 'skipThink' },
-        { label: 'Build everything at once', cmd: 'buildAll' },
-      ]);
-      this.plan.think = { question: q, msgId: msg.id };
-      this.awaiting = { kind: 'think' };
-    } else {
-      this.say('tutor', intro, [{ label: 'Build step 1', cmd: 'buildNext', primary: true }, { label: 'Build everything at once', cmd: 'buildAll' }]);
-    }
+    const intro = `Let's build this in **${steps.length} small steps**. That's how experienced vibe coders work: build a little, check it runs, then add more.\n\n${list}`;
+    this.say('tutor', intro + (this.level === 'guided' ? '\n\nWe\'ll do each step the structured way: explain the idea, write the steps, then read the code.' : ''), [
+      { label: this.level === 'guided' ? 'Start step 1' : 'Build step 1', cmd: 'buildNext', primary: true },
+      { label: 'Do it all at once', cmd: 'buildAll' },
+    ]);
     return true;
   }
 
-  private async handleThink(text: string) {
-    const plan = this.plan;
-    this.awaiting = undefined;
-    if (!plan?.think) return;
-    plan.think.answer = text;
-    this.clearButtons(plan.think.msgId);
+  // ================================================================== Steps 1 and 2 (before any code)
+
+  private async startGate(request: string, opts: ActOpts) {
+    const g: Gate = {
+      request, opts: { ...opts, structured: true }, step: 1, rounds: 0, turns: [{ role: 'student', text: request }],
+      ideaParts: [request], idea: '', steps: '', keyIdeas: [], scaffolded: { idea: false, steps: false }, msgIds: [],
+    };
+    this.gate = g;
+    this.awaiting = { kind: 'gate' };
+    this.logger.log('vibe_gate', undefined, { kind: 'start', request, planStep: opts.planStep });
+
+    // The request itself may already explain the idea; check it before asking.
+    this.setBusy(true, 'Thinking…');
+    const res = await this.ideaCheck(g);
+    this.setBusy(false);
+    if (res?.verdict === 'enough') {
+      this.gateSay(`Before I write any code, three steps: **1. Explain the idea → 2. Write the steps → 3. Read the code.**\n\n✅ **Step 1: Explain the idea.** Your request already covers it. ${stripThinking(res.reply || '')}`);
+      return this.toSteps();
+    }
+    const question = res?.reply ? stripThinking(res.reply) : 'What does the program need to repeat or decide, what does it keep track of, and what does it show at the end?';
+    g.turns.push({ role: 'tutor', text: question });
+    this.gateSay(
+      `Before I write any code, three steps: **1. Explain the idea → 2. Write the steps → 3. Read the code.**\n\n` +
+      `**Step 1: Explain the idea.** In a sentence or two, what does the program need to do? ${question}`);
+  }
+
+  private async ideaCheck(g: Gate) {
+    const transcript = g.turns.map(t => `${t.role === 'student' ? 'STUDENT' : 'TUTOR'}: ${t.text}`).join('\n');
+    const res = await this.askJson<{ verdict: string; key_ideas?: string[]; covered?: number[]; reply?: string }>(
+      P.IDEA_SYSTEM, P.ideaPrompt(g.request, transcript, Math.max(1, g.rounds), this.maxRoundsPerStep, g.keyIdeas.length ? g.keyIdeas : undefined),
+      v => typeof v.verdict === 'string'
+    );
+    if (res?.key_ideas?.length && !g.keyIdeas.length) g.keyIdeas = res.key_ideas.map(String).slice(0, 4);
+    this.logger.log('vibe_gate', undefined, { kind: 'idea_check', round: g.rounds, verdict: res?.verdict, keyIdeas: g.keyIdeas, covered: res?.covered, reply: res?.reply });
+    return res;
+  }
+
+  private async handleGate(text: string) {
+    const g = this.gate;
+    if (!g) { this.awaiting = undefined; return; }
     this.say('student', text);
-    this.logger.log('vibe_learn', undefined, { kind: 'think_answer', question: plan.think.question, answer: text });
-    await this.buildStep(this.nextStepIndex() ?? 0, false);
+    g.rounds++;
+    const final = g.rounds >= this.maxRoundsPerStep;
+
+    if (g.step === 1) {
+      g.turns.push({ role: 'student', text });
+      g.ideaParts.push(text);
+      this.logger.log('vibe_gate', undefined, { kind: 'idea_answer', round: g.rounds, text });
+      this.setBusy(true, 'Reading your idea…');
+      const res = await this.ideaCheck(g);
+      this.setBusy(false);
+      const reply = res?.reply ? stripThinking(res.reply) : '';
+      if (!res || res.verdict === 'enough') {
+        this.gateSay(`✅ ${reply || 'That\'s the idea.'}`);
+        return this.toSteps();
+      }
+      if (final) {
+        // Bounded: explain what is missing and move on, so nobody gets stuck (logged as scaffolded).
+        g.scaffolded.idea = true;
+        g.ideaParts.push(`(explained by the tutor: ${reply})`);
+        this.gateSay(`${reply}\n\nLet's carry that idea into the steps.`);
+        return this.toSteps();
+      }
+      g.turns.push({ role: 'tutor', text: reply });
+      this.gateSay(reply);
+      return;
+    }
+
+    g.steps = text;
+    this.logger.log('vibe_gate', undefined, { kind: 'steps_answer', round: g.rounds, text });
+    this.setBusy(true, 'Checking your steps…');
+    const res = await this.askJson<{ verdict: string; issue?: string; reply?: string }>(
+      P.STEPS_SYSTEM, P.stepsPrompt(g.request, g.idea, text, g.rounds, this.maxRoundsPerStep, g.keyIdeas),
+      v => typeof v.verdict === 'string'
+    );
+    this.setBusy(false);
+    this.logger.log('vibe_gate', undefined, { kind: 'steps_check', round: g.rounds, verdict: res?.verdict, issue: res?.issue, reply: res?.reply });
+    const reply = res?.reply ? stripThinking(res.reply) : '';
+    if (!res || res.verdict === 'ready') {
+      this.gateSay(`✅ ${reply || 'Those steps work.'}`);
+      return this.finishGate();
+    }
+    if (final) {
+      g.scaffolded.steps = true;
+      g.stepsNote = res.issue || reply;
+      this.gateSay(`${reply}\n\nI'll write the code from your steps with that fixed, and point out where.`);
+      return this.finishGate();
+    }
+    this.gateSay(reply);
+  }
+
+  private toSteps() {
+    const g = this.gate!;
+    g.step = 2;
+    g.rounds = 0;
+    g.idea = g.ideaParts.join(' / ');
+    this.gateSay(
+      '**Step 2: Write the steps.** Describe every step the program takes, in order, in your own words. No code needed. ' +
+      'Say where values start, what repeats (and exactly where it starts and stops), any decisions, and what it shows at the end.\n\n' +
+      '_Example for a different task: "Start a counter at 10. While the counter is 1 or more, show it and take 1 away. Then show Lift off!"_');
+  }
+
+  private async finishGate() {
+    const g = this.gate!;
+    this.gate = undefined;
+    this.awaiting = undefined;
+    g.msgIds.forEach(id => this.clearButtons(id));
+    this.stats.gates++;
+    if (!g.scaffolded.idea && !g.scaffolded.steps) this.stats.gatesUnaided++;
+    this.logger.log('vibe_gate', undefined, { kind: 'done', request: g.request, idea: g.idea, steps: g.steps, scaffolded: g.scaffolded, keyIdeas: g.keyIdeas });
+    const steps = g.stepsNote ? `${g.steps}\n(Tutor note: ${g.stepsNote})` : g.steps;
+    this.setBusy(true, 'Reading your project…');
+    const ctx = await buildContext(this.maxChars, this.projectDir);
+    await this.act(g.request, ctx, g.opts, { idea: g.idea, steps });
+  }
+
+  private async skipSteps() {
+    const g = this.gate;
+    if (!g) return;
+    this.gate = undefined;
+    this.awaiting = undefined;
+    g.msgIds.forEach(id => this.clearButtons(id));
+    this.logger.log('vibe_gate', undefined, { kind: 'skipped', step: g.step, rounds: g.rounds, request: g.request });
+    this.say('system', 'Skipped the steps; writing the code now.');
+    this.setBusy(true, 'Reading your project…');
+    const ctx = await buildContext(this.maxChars, this.projectDir);
+    await this.act(g.request, ctx, g.opts, g.idea || g.ideaParts.length > 1 ? { idea: g.idea || g.ideaParts.join(' / ') } : undefined);
+  }
+
+  /** A tutor message during Steps 1-2; carries the skip button (if allowed) on the latest message only. */
+  private gateSay(text: string) {
+    const g = this.gate;
+    g?.msgIds.forEach(id => this.clearButtons(id));
+    const m = this.say('tutor', text, g && this.allowSkipSteps ? [{ label: 'Skip: just write the code', cmd: 'skipSteps' }] : undefined);
+    g?.msgIds.push(m.id);
   }
 
   private nextStepIndex(): number | undefined {
@@ -426,18 +593,13 @@ export class VibeSession {
   private async buildStep(k: number, all: boolean) {
     const plan = this.plan;
     if (!plan || k >= plan.steps.length) return;
-    if (this.awaiting?.kind === 'think') {
-      this.awaiting = undefined;
-      if (plan.think) {
-        this.clearButtons(plan.think.msgId);
-        this.logger.log('vibe_learn', undefined, { kind: 'think_skipped', question: plan.think.question });
-      }
-    }
     const steps = all ? plan.steps.slice(k).filter(s => s.status !== 'done') : [plan.steps[k]];
     steps.forEach(s => (s.status = 'doing'));
     const request = all
       ? `Build all remaining steps of the plan: ${steps.map(s => s.title).join('; ')}.`
       : `Build step ${k + 1} of the plan: ${plan.steps[k].title} — ${plan.steps[k].detail}`;
+    this.view.messages.forEach(m => { if (m.buttons?.some(b => b.cmd === 'buildNext')) m.buttons = undefined; });
+    if (this.level === 'guided') return this.startGate(request, { planStep: k, planAll: all });
     this.setBusy(true, 'Reading your project…');
     const ctx = await buildContext(this.maxChars, this.projectDir);
     await this.act(request, ctx, { planStep: k, planAll: all });
@@ -475,7 +637,7 @@ export class VibeSession {
         case 'challengeHint': this.challengeHint(a); break;
         case 'challengeCheck': await this.challengeCheck(a); break;
         case 'challengeSkip': await this.challengeSkip(a); break;
-        case 'skipThink': await this.buildStep(this.nextStepIndex() ?? 0, false); break;
+        case 'skipSteps': await this.skipSteps(); break;
         case 'buildNext': {
           const k = this.nextStepIndex();
           if (k !== undefined) await this.buildStep(k, false);
@@ -489,7 +651,6 @@ export class VibeSession {
         case 'dropPlan':
           this.logger.log('vibe_plan', undefined, { dropped: true });
           this.plan = undefined;
-          if (this.awaiting?.kind === 'think') this.awaiting = undefined;
           break;
         case 'quizProject': await this.quizProject(); break;
         case 'skipQuiz': await this.endQuiz(true); break;
@@ -510,7 +671,7 @@ export class VibeSession {
           if (cmd === 'retryNew') this.target = 'new';
           this.setBusy(true, 'Reading your project…');
           try {
-            await this.act(last.text, await buildContext(this.maxChars, this.projectDir), last.opts);
+            await this.act(last.text, await buildContext(this.maxChars, this.projectDir), last.opts, last.student);
           } finally {
             this.target = prev;
           }
@@ -615,7 +776,7 @@ export class VibeSession {
     if (!p || this.level === 'off' || this.quiz || this.tour || this.awaiting) return;
     if (p.learn[stage] === 'na') return;
     if (stage !== 'tour' && p.card.status !== 'accepted') {
-      this.say('system', 'Accept the change first — then we can run it and check it together.');
+      this.say('system', 'Accept the change first, then we can run it and investigate it together.');
       return;
     }
     switch (stage) {
@@ -634,16 +795,16 @@ export class VibeSession {
     if (status !== 'active') await this.advance(id);
   }
 
-  /** Guided mode: start the next learning step for this change. Both modes: offer the next plan step when done. */
+  /** Guided mode: run Step 3 (predict, run, investigate, modify) on structured changes. Both modes: offer the next plan step when done. */
   private async advance(id: string) {
     const p = this.proposals.get(id);
     if (!p) return;
-    if (this.level === 'guided') {
+    if (this.level === 'guided' && p.structured) {
+      if (p.card.status !== 'accepted') return;
       for (const s of STAGES) {
         const st = p.learn[s];
         if (st === 'done' || st === 'skipped' || st === 'na') continue;
         if (st === 'active') return;
-        if (s !== 'tour' && p.card.status !== 'accepted') return;
         return this.startStage(id, s);
       }
     }
@@ -659,8 +820,8 @@ export class VibeSession {
       this.logger.log('vibe_plan', undefined, { completed: true });
       return;
     }
-    this.say('tutor', `Step ${p.planStep + 1} done ✔. Next up — **step ${k + 1}: ${this.plan.steps[k].title}**.\n\n_Tip: try describing step ${k + 1} in your own words (what it should do, what goes in, what comes out) — or just press the button._`,
-      [{ label: `Build step ${k + 1}`, cmd: 'buildNext', primary: true }]);
+    this.say('tutor', `Plan step ${p.planStep + 1} done ✔. Next up: **step ${k + 1}, ${this.plan.steps[k].title}**.`,
+      [{ label: this.level === 'guided' ? `Start step ${k + 1}` : `Build step ${k + 1}`, cmd: 'buildNext', primary: true }]);
   }
 
   // ---- 1. Walkthrough (Investigate), shown in the real editor
@@ -671,7 +832,7 @@ export class VibeSession {
 
     this.setBusy(true, 'Preparing a walkthrough…');
     const res = await this.askJson<{ stops: { start: number; end?: number; title: string; text: string }[] }>(
-      P.TOUR_SYSTEM, P.tourPrompt(p.path, numbered(lines), changeText(p), p.request, this.plan?.think?.answer),
+      P.TOUR_SYSTEM, P.tourPrompt(p.path, numbered(lines), changeText(p), p.request, [p.idea, p.steps && `Their steps: ${p.steps}`].filter(Boolean).join('\n') || undefined),
       v => Array.isArray(v.stops) && v.stops.length > 0
     );
     this.setBusy(false);
@@ -691,6 +852,7 @@ export class VibeSession {
     this.tour = { id: p.id, stops, index: 0, uri, pending };
     p.learn.tour = 'active';
     this.logger.log('vibe_learn', undefined, { kind: 'tour_start', id: p.id, stops: stops.length, pending });
+    if (!pending && p.structured) this.say('tutor', '🧭 **Investigate:** let\'s walk through how it works. Follow the highlighted lines in the editor.');
     await this.showTourStop();
   }
 
@@ -730,7 +892,7 @@ export class VibeSession {
     this.logger.log('vibe_learn', undefined, { kind: 'tour_end', id: t.id, reachedStop: t.index + 1, of: t.stops.length, status });
     if (silent) return;
     if (p.card.status === 'pending') {
-      this.say('tutor', 'That\'s the walkthrough. If it makes sense, press **Accept** on the change — or ask me about anything that\'s unclear first.');
+      this.say('tutor', 'That\'s the walkthrough. If it makes sense, press **Accept** on the change, or ask me about anything that\'s unclear first.');
       return;
     }
     await this.advance(p.id);
@@ -789,7 +951,7 @@ export class VibeSession {
     const truth = out + (err ? `\n[error]\n${err}` : '');
     const inputNote = stdin.trim() ? `It will be given this input:\n\`\`\`\n${stdin.trimEnd()}\n\`\`\`\n` : '';
     const msg = this.say('tutor',
-      `🔮 **Predict, then run.** ${inputNote}Before I run \`${p.path}\`, what do you think it will print? Type your best guess — a wrong guess is useful too, it shows us what to look at.`,
+      `🔮 **Predict:** read \`${p.path}\` in the editor. ${inputNote}Before I **run** it, what do you think it will print? Type your best guess. A wrong guess is useful too: it shows us what to look at.`,
       [{ label: 'Skip', cmd: 'skipPredict' }]);
     this.awaiting = { kind: 'predict', id: p.id, truth, stdin, msgId: msg.id };
     p.learn.predict = 'active';
@@ -847,24 +1009,103 @@ export class VibeSession {
       this.say('system', 'I couldn\'t build a question for that change.');
       return this.markStage(p.id, 'check', 'na');
     }
+    this.setBusy(true, 'Checking the question against your program…');
+    const questions = await this.verifyQuestions(p, res.questions.slice(0, this.perChange));
+    this.setBusy(false);
+    if (!questions.length) {
+      this.say('system', 'I couldn\'t write a reliable question for that change, so I\'ve skipped it.');
+      return this.markStage(p.id, 'check', 'na');
+    }
     p.learn.check = 'active';
-    this.startQuiz('change', res.questions.slice(0, this.perChange), p.concepts, p.id);
+    this.startQuiz('change', questions, p.concepts, p.id);
+  }
+
+  /**
+   * AI answer keys can be wrong. For "what would it print if…" questions the model also sends the changed
+   * program; we run it and trust the real output: keep a correct key, fix a wrong one, drop a question none
+   * of whose answers match.
+   */
+  private async verifyQuestions(p: Proposal, qs: Mcq[]): Promise<Mcq[]> {
+    const kept: Mcq[] = [];
+    for (const q of qs) {
+      if (!q.change) { kept.push(q); continue; }
+      const out = await this.runWithEdit(p, q.change);
+      const actual = out.output;
+      if (actual === undefined || actual.length > 200) {
+        this.logger.log('vibe_learn', undefined, { kind: 'question_unverified', id: p.id, stem: q.stem, reason: out.reason, change: q.change });
+        kept.push(q);
+        continue;
+      }
+      const matches = q.choices.map((c, i) => (containsTokens(c, actual) ? i : -1)).filter(i => i >= 0);
+      const verdict = matches.length === 1 && matches[0] === q.correct ? 'verified' : matches.length === 1 ? 'corrected' : 'dropped';
+      this.logger.log('vibe_learn', undefined, { kind: 'question_check', id: p.id, stem: q.stem, verdict, actual, aiKey: q.correct, matches });
+      if (verdict === 'dropped') continue;
+      if (verdict === 'corrected') {
+        q.correct = matches[0];
+        q.explanation = `If you make that change and run it, it prints ${actual}.`;
+      }
+      kept.push(q);
+    }
+    return kept;
+  }
+
+  /** Applies a {find, replace} edit to the change's file (in memory) and runs the result; output = what it printed. */
+  private async runWithEdit(p: Proposal, edit: Edit | undefined): Promise<{ output?: string; reason?: string }> {
+    const lang = p.path.endsWith('.py') ? 'python' : p.path.endsWith('.js') ? 'javascript' : undefined;
+    if (!lang) return { reason: 'not runnable' };
+    const code = (await readCurrent(this.fileUri(p.path))) ?? p.newContent;
+    if (INPUT_RE.test(code)) return { reason: 'reads input' };
+    let program = code;
+    if (edit) {
+      if (typeof edit.find !== 'string' || typeof edit.replace !== 'string' || !edit.find.trim()) return { reason: 'no edit' };
+      const r = applyBlocks(code, [{ path: p.path, search: edit.find, replace: edit.replace }]);
+      if (!r.applied) return { reason: 'edit did not match the file' };
+      program = r.content;
+    }
+    const run = await runProgram(lang, program, '');
+    if (run.error) return { reason: run.error };
+    if (run.timedOut) return { reason: 'timed out' };
+    const output = run.stdout.trim();
+    return output ? { output } : { reason: run.stderr.trim() ? 'crashed' : 'printed nothing' };
   }
 
   // ---- 4. Your turn (Modify)
   private async startChallenge(p: Proposal) {
     const code = (await readCurrent(this.fileUri(p.path))) ?? p.newContent;
     this.setBusy(true, 'Thinking of a challenge for you…');
-    const res = await this.askJson<{ task: string; hint: string; criteria: string }>(
-      P.CHALLENGE_SYSTEM, P.challengePrompt(p.path, numbered(code.split('\n')), p.request, p.concepts),
-      v => typeof v.task === 'string' && v.task.length > 5
+    // A challenge whose solution prints the same thing teaches nothing visible: check by running it.
+    const before = await this.runWithEdit(p, undefined);
+    type Candidate = { task: string; hint?: string; criteria?: string; solution?: Edit };
+    const ask = (rejected?: string) => this.askJson<{ challenges: Candidate[] }>(
+      P.CHALLENGE_SYSTEM, P.challengePrompt(p.path, numbered(code.split('\n')), p.request, p.concepts, rejected, before.output),
+      v => Array.isArray(v.challenges) && v.challenges.some(c => typeof c?.task === 'string' && c.task.length > 5),
+      undefined, rejected ? 0.7 : 0
     );
+    // Pick the first candidate whose solution, when run, really changes the output. A candidate we can't
+    // run (no or unusable solution) is a fallback; one that prints the same is never used.
+    let res: Candidate | undefined;
+    let fallback: Candidate | undefined;
+    const rejected: string[] = [];
+    for (let round = 0; round < 2 && !res; round++) {
+      const reply = await ask(round ? `${rejected.map(t => `"${t}"`).join(', ')} print the same output as now (${before.output}).` : undefined);
+      const candidates = (reply?.challenges ?? []).filter(c => typeof c?.task === 'string' && c.task.length > 5).slice(0, 4);
+      for (const c of candidates) {
+        if (before.output === undefined) { res = c; break; } // nothing to compare against
+        const after = c.solution ? await this.runWithEdit(p, c.solution) : { output: undefined, reason: 'no solution given' };
+        const same = after.output !== undefined && after.output === before.output;
+        this.logger.log('vibe_learn', undefined, { kind: 'challenge_check_solution', id: p.id, task: c.task, before: before.output, after: after.output, reason: after.reason, same });
+        if (after.output !== undefined && !same) { res = c; break; }
+        if (same) rejected.push(c.task);
+        else fallback = fallback ?? c;
+      }
+      if (!res && fallback) res = fallback;
+    }
     this.setBusy(false);
     if (!res) return this.markStage(p.id, 'challenge', 'na');
 
     const task = stripThinking(res.task);
     const msg = this.say('tutor',
-      `🛠 **Your turn:** ${task}\n\nChange \`${p.path}\` yourself in the editor, **or** practise vibe coding by asking me to do it — describe exactly what should happen. Then press **Check my work**.`,
+      `🛠 **Modify, your turn:** ${task}\n\nChange \`${p.path}\` yourself in the editor, **or** practise vibe coding by asking me to do it (describe exactly what should happen). Then press **Check my work**.`,
       [
         { label: 'Hint', cmd: 'challengeHint', arg: p.id },
         { label: 'Check my work', cmd: 'challengeCheck', arg: p.id, primary: true },
@@ -942,7 +1183,7 @@ export class VibeSession {
     }));
     this.quiz = { kind, items, index: 0, right: 0, changeId, fallbackConcepts };
     this.say('tutor', kind === 'change'
-      ? '✅ **Quick check** on the change you just accepted:'
+      ? '🔍 **Investigate:** a question about how your code works:'
       : `Quiz on your program: ${items.length} question${items.length > 1 ? 's' : ''}.`);
     this.logQuizQuestion();
   }
@@ -1089,10 +1330,11 @@ export class VibeSession {
       this.quiz = undefined;
       this.awaiting = undefined;
     }
-    const desc = level === 'guided' ? 'I\'ll walk you through each change automatically.'
-      : level === 'light' ? 'Learning tools are on the change cards whenever you want them.'
-      : 'Just coding — no teaching extras.';
-    this.say('system', `Learning level: **${level}**. ${desc}`);
+    if (level !== 'guided' && this.gate) void this.skipSteps();
+    const desc = level === 'guided' ? 'Structured vibe coding: explain the idea and write the steps before I code, then predict, run, investigate and modify.'
+      : level === 'light' ? 'Learning tools are on each change whenever you want them.'
+      : 'Regular vibe coding: I write code straight from your request.';
+    this.say('system', `Mode: **${conditionLabel(level)}**. ${desc}`);
   }
 
   private async newProject() {
@@ -1191,10 +1433,10 @@ export class VibeSession {
     return this.history.slice(-10);
   }
 
-  private async askJson<T>(system: string, prompt: string, valid: (v: T) => boolean, history?: ChatMsg[]): Promise<T | undefined> {
+  private async askJson<T>(system: string, prompt: string, valid: (v: T) => boolean, history?: ChatMsg[], temperature = 0): Promise<T | undefined> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const p = attempt === 0 ? prompt : `${prompt}\n\nYour previous reply was not valid JSON in the required format. Reply with ONLY the JSON object.`;
-      const res = await callBackend({ model: this.model, system, prompt: p, history, temperature: 0, context: this.context });
+      const res = await callBackend({ model: this.model, system, prompt: p, history, temperature, context: this.context });
       const parsed = extractJson<T>(res.text);
       if (parsed && valid(parsed)) return parsed;
       this.logger.log('parse_failure', undefined, { attempt, raw: res.text.slice(0, 600) }, res.ms);
@@ -1227,7 +1469,8 @@ export class VibeSession {
     v.levelLocked = v.logging;
     v.level = this.level;
     v.placeholder =
-      this.awaiting?.kind === 'think' ? 'Your idea, in plain words…'
+      this.awaiting?.kind === 'gate' && this.gate?.step === 1 ? 'Step 1: explain the idea in a sentence or two…'
+      : this.awaiting?.kind === 'gate' ? 'Step 2: write every step, in your own words…'
       : this.awaiting?.kind === 'predict' ? 'What will it print? Your best guess…'
       : this.tour ? 'Ask about this part of the code…'
       : v.ctx.selection ? 'Ask about, or ask to change, the selected code…'
@@ -1238,6 +1481,8 @@ export class VibeSession {
       label: q.kind === 'change' ? 'Check on your change' : 'Quiz on your program',
       index: q.index, total: q.items.length, stem: q.items[q.index].stem, choices: q.items[q.index].choices,
     } : undefined;
+
+    v.structured = this.structuredProgress();
 
     const t = this.tour;
     v.tour = t ? {
@@ -1272,6 +1517,17 @@ export class VibeSession {
     v.draft = undefined;
   }
 
+  /** What the 1-2-3 bar shows: the gate step, or Step 3 with the current PRIMM stage of the latest structured change. */
+  private structuredProgress(): VibeView['structured'] {
+    if (this.level !== 'guided') return undefined;
+    if (this.gate) return { step: this.gate.step };
+    const latest = this.currentStructured ? this.proposals.get(this.currentStructured) : undefined;
+    if (!latest || latest.card.status === 'rejected' || latest.card.status === 'failed') return undefined;
+    if (latest.card.status === 'pending') return { step: 3, primm: 'accept' };
+    const next = STAGES.find(s => latest.learn[s] === 'active' || latest.learn[s] === 'todo');
+    return next ? { step: 3, primm: next } : undefined;
+  }
+
   private skillRows(): VibeView['skills'] {
     const s = this.stats;
     const frac = (a: number, b: number) => (b ? `${a}/${b}` : '—');
@@ -1287,9 +1543,12 @@ export class VibeSession {
       }
       prompting = `${avg.toFixed(1)}/6${trend}`;
     }
+    const accepted = [...this.proposals.values()].filter(p => p.card.status === 'accepted');
+    const read = accepted.filter(p => p.viewedDiff || p.toured || p.learn.predict === 'done').length;
     return [
+      { label: 'Explaining', value: frac(s.gatesUnaided, s.gates), detail: 'Times you explained the idea and wrote working steps without needing the tutor to fill them in.' },
       { label: 'Prompting', value: prompting, detail: 'How clearly your requests describe the goal, inputs/outputs and details (average of your last 5).' },
-      { label: 'Reviewing', value: frac(s.reviewed, s.accepted), detail: 'Changes you walked through or looked at as a diff before accepting.' },
+      { label: 'Reading code', value: frac(read, accepted.length), detail: 'Accepted changes you actually read: viewed the diff, walked through it, or predicted its output.' },
       { label: 'Predicting', value: frac(s.predRight, s.predTotal), detail: 'Times you correctly predicted what your program prints.' },
       { label: 'Understanding', value: frac(s.checkRight, s.checkTotal), detail: 'Check and quiz questions answered correctly.' },
       { label: 'Modifying', value: frac(s.chDone, s.chGiven), detail: '"Your turn" challenges completed.' },
@@ -1298,13 +1557,36 @@ export class VibeSession {
 }
 
 function parseLevel(l: string | undefined): Level {
-  return l === 'off' ? 'off' : l === 'light' || l === 'offer' ? 'light' : 'guided';
+  if (l === 'off' || l === 'regular') return 'off';
+  if (l === 'light' || l === 'offer') return 'light';
+  return 'guided';
+}
+
+/** The study's names for the conditions (COSC 449 thesis): structured vs regular vibe coding. */
+function conditionName(level: Level): string {
+  return level === 'guided' ? 'structured' : level === 'off' ? 'regular' : 'light';
+}
+
+function conditionLabel(level: Level): string {
+  return level === 'guided' ? 'Structured vibe coding' : level === 'off' ? 'Regular vibe coding' : 'Light';
 }
 
 function changeText(p: Proposal): string {
   return p.blocks.map(b => b.search.trim()
     ? `--- before ---\n${b.search}\n--- after ---\n${b.replace}`
     : `--- whole file ---\n${b.replace}`).join('\n\n').slice(0, 8000);
+}
+
+/** True if the words of `needle` (e.g. a program's output) appear, in order and adjacent, in `text`. */
+function containsTokens(text: string, needle: string): boolean {
+  const tok = (x: string) => x.toLowerCase().replace(/["'`[\](),.:;]/g, ' ').split(/\s+/).filter(Boolean);
+  const t = tok(text);
+  const n = tok(needle);
+  if (!n.length) return false;
+  for (let i = 0; i + n.length <= t.length; i++) {
+    if (n.every((w, k) => t[i + k] === w)) return true;
+  }
+  return false;
 }
 
 function norm(s: string): string {
