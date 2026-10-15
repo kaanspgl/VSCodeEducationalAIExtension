@@ -92,6 +92,12 @@
           "default": "http://127.0.0.1:11434",
           "description": "Ollama server URL."
         },
+        "vibelearner.ollamaContextLength": {
+          "type": "number",
+          "default": 16384,
+          "minimum": 4096,
+          "description": "Context window (tokens) requested from Ollama. Ollama defaults to 4096 and silently cuts longer prompts; VibeLearner sends the whole project, so keep this large. Lower it only if the model runs out of memory."
+        },
         "vibelearner.model": {
           "type": "string",
           "default": "qwen3-coder:30b",
@@ -218,11 +224,23 @@
           ],
           "default": "guided",
           "enumDescriptions": [
-            "Plain vibe-coding assistant (comparison/control): no prompt coaching, planning, walkthroughs or checks.",
-            "All learning tools available as buttons (plan, walkthrough, predict & run, check, your turn); nothing starts automatically.",
-            "The learning loop runs automatically around every change: walkthrough before accepting, then predict & run, check, and a your-turn challenge. Every step can be skipped."
+            "Regular vibe coding (comparison condition): the AI writes code straight from the request; no steps, coaching or learning tools.",
+            "Light: the learning tools (predict & run, walk through, questions, modify) are on each change as buttons; nothing is required.",
+            "Structured vibe coding (treatment condition): for anything that needs programming logic, the student explains the idea (Step 1) and writes the steps (Step 2) before the AI writes code, then reads the code the PRIMM way (Step 3: predict, run, investigate, modify)."
           ],
-          "description": "How much learning support VibeLearner adds on top of vibe coding."
+          "description": "Structured vs regular vibe coding (the study conditions)."
+        },
+        "vibelearner.learning.maxRoundsPerStep": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Structured mode: guiding rounds for Step 1 (idea) and Step 2 (steps) before the tutor explains what is missing and moves on (logged as scaffolded)."
+        },
+        "vibelearner.learning.allowSkipSteps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Structured mode: show \"Skip: just write the code\" during Steps 1-2 (skips are logged). Turn off for the study if every request must go through the steps."
         },
         "vibelearner.learning.clarify": {
           "type": "boolean",

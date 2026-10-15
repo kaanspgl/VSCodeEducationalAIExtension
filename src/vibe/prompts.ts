@@ -1,19 +1,20 @@
 /**
- * Prompts for project mode: vibe coding with a learning loop around every AI change.
+ * Prompts for project mode: structured vibe coding (COSC 449 honours, Kaan Sapoglu).
  *
- * The loop follows PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019),
- * adapted so the AI does the "Make" and the student does the rest:
- *   plan (decompose) -> think first (elicit the idea) -> build (AI, using the student's idea)
- *   -> walkthrough (investigate, before accepting) -> predict & run -> check -> your turn (modify)
- * plus a prompt coach on every request, since learning to vibe code is largely learning to specify.
+ * Structured vibe coding = PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019)
+ * with the AI doing the Make step. Before any code, the student goes through:
+ *   Step 1  Explain the idea   — the AI asks guiding questions until the key ideas are there.
+ *   Step 2  Write the steps    — every step, in any form, no code; the AI checks they are complete and would work.
+ *   Step 3  Read the code      — only now the AI writes it; the student predicts, runs, investigates and modifies it.
+ * Plus a prompt coach on every request and a plan for big builds.
  *
  * Learning levels (the research manipulation):
- *   off    : plain vibe-coding assistant (control). No coaching, planning, or learning loop.
- *   light  : everything is available as buttons; nothing runs automatically.
- *   guided : the loop runs automatically after each change (still skippable at every step).
+ *   off    : regular vibe coding (comparison). The AI writes code straight from the request.
+ *   light  : the learning tools are available as buttons; nothing is required.
+ *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v2-2026-10';
+export const VIBE_PROMPT_VERSION = 'vibe-v3-2026-10';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -61,8 +62,10 @@ export function actionSystem(level: Level): string {
     'The student always gets working code; your extra job is to make sure they can understand it.',
     '',
     'Teaching rules:',
+    '- Talk TO the student as "you" ("I followed your steps"), never about "the student".',
     '- Write beginner-readable code: clear names, small functions, simple constructs, short comments that say WHY.',
     '- If a PROJECT PLAN is given, build ONLY the requested step (unless told to build everything). The program must still run after the step.',
+    '- If the student wrote their own STEPS, the code must follow THEIR steps: same order, same approach, their names for things where sensible, so each step maps to a few lines. Only fix what would not work, and say what you changed and why.',
     '- If the student shared their own idea for how it should work, build it THEIR way when it is correct (even if not the most efficient) and say how the code follows their idea. If their idea is wrong, use a correct approach and kindly explain the difference.',
     '- For bugs and errors: first explain in plain terms what the error means and why it happens, then fix it.',
     '- Make the smallest change that does the job, keep the student\'s style, and do not rewrite files unnecessarily.',
@@ -78,13 +81,70 @@ export function actionSystem(level: Level): string {
   ].join('\n');
 }
 
-export function actionPrompt(contextText: string, request: string, planText?: string, studentIdea?: string): string {
+export function actionPrompt(contextText: string, request: string, planText?: string, studentIdea?: string, studentSteps?: string): string {
   return [
     contextText,
     planText ? `\n${planText}` : '',
-    studentIdea ? `\nTHE STUDENT'S OWN IDEA FOR HOW IT SHOULD WORK: ${studentIdea}` : '',
+    studentIdea ? `\nTHE STUDENT'S IDEA (Step 1): ${studentIdea}` : '',
+    studentSteps ? `\nTHE STUDENT'S STEPS (Step 2) — write the code from these, step by step, and add a short comment naming each step:\n${studentSteps}` : '',
     `\nSTUDENT REQUEST:\n${request}`,
   ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Steps 1 and 2: explain the idea, write the steps (no code is written yet)
+// ---------------------------------------------------------------------------
+
+export const IDEA_SYSTEM = [
+  'You run Step 1 ("Explain the idea") of structured vibe coding for a first-year programming student. You do NOT write code.',
+  'Before the AI writes any code, the student must describe at a high level what the program needs to do: what repeats or gets decided, what it keeps track of, and what it shows or returns.',
+  '',
+  'key_ideas: the 2-4 high-level ideas this task needs (use the KEY IDEAS given, if any). Example for "add up every whole number from 0 to 100 and print the total": repeat over the numbers 0 to 100; keep a running total; print the total at the end.',
+  'verdict:',
+  '- "enough": the student has expressed every key idea, in any wording. Be lenient on wording and detail; the exact steps come in Step 2.',
+  '- "missing": one or more key ideas are not there yet.',
+  '- "misconception": the student has an idea that would not work.',
+  '- "unsure": the student says they do not know.',
+  'reply (when not enough): ONE short guiding question that leads the student to the most important missing idea, without stating it. For "misconception", gently question the wrong idea. For "unsure", give a short everyday analogy first, then the question. At most 60 words. Never give code or the steps.',
+  'reply (when enough): one short sentence confirming what they got right.',
+  'If this is the final round and ideas are still missing: verdict "missing", and the reply briefly EXPLAINS the missing idea in plain words (no code), so the student can continue.',
+  'Respond with ONLY JSON: {"verdict":"enough|missing|misconception|unsure","key_ideas":["..."],"covered":[0],"reply":"..."}',
+].join('\n');
+
+export function ideaPrompt(request: string, transcript: string, round: number, maxRounds: number, keyIdeas?: string[]): string {
+  return [
+    `THE STUDENT WANTS: ${request}`,
+    keyIdeas?.length ? `KEY IDEAS (from the instructor):\n${keyIdeas.map((k, i) => `${i}. ${k}`).join('\n')}` : '',
+    `Round ${round} of at most ${maxRounds}.`,
+    '',
+    `CONVERSATION SO FAR (Step 1):\n${transcript}`,
+  ].filter(Boolean).join('\n');
+}
+
+export const STEPS_SYSTEM = [
+  'You run Step 2 ("Write the steps") of structured vibe coding for a first-year programming student. You do NOT write code.',
+  'The student describes EVERY step of the program in detail, in any form (sentences, a list, their own words), without writing code. Example: "Start the total at zero, add each number from 0 to 100 to the total, then print the total."',
+  '',
+  'Check the steps by tracing them on a small example in your head:',
+  '- complete: every needed step is there (starting values, what repeats and exactly where it starts and stops, decisions, the final output).',
+  '- would work: following the steps literally gives the right result, including edge cases the task implies.',
+  'Do not require code syntax or a particular format. Any clear wording is fine.',
+  'verdict: "ready" if complete and would work; otherwise "needs_work".',
+  'reply (needs_work): point to the FIRST problem as a question or a concrete case to trace (e.g. "Follow your steps for the numbers 0 to 3: what is the total after each step?"). Do not rewrite their steps and do not give code. At most 60 words. Ask them to send their full steps again with the fix.',
+  'reply (ready): one short sentence confirming the steps work.',
+  'If this is the final round and the steps still need work: verdict "needs_work", and the reply names exactly what is missing or wrong in plain words (no code), so the AI can build from the corrected steps.',
+  'Respond with ONLY JSON: {"verdict":"ready|needs_work","issue":"short note on the problem, or empty","reply":"..."}',
+].join('\n');
+
+export function stepsPrompt(request: string, idea: string, steps: string, round: number, maxRounds: number, keyIdeas?: string[]): string {
+  return [
+    `THE STUDENT WANTS: ${request}`,
+    `THE STUDENT'S IDEA (Step 1): ${idea}`,
+    keyIdeas?.length ? `KEY IDEAS: ${keyIdeas.join('; ')}` : '',
+    `Round ${round} of at most ${maxRounds}.`,
+    '',
+    `THE STUDENT'S STEPS:\n${steps}`,
+  ].filter(Boolean).join('\n');
 }
 
 /** Where the student wants the code to go (the "Code goes in" picker / New project). */
@@ -124,6 +184,7 @@ export const ROUTER_SYSTEM = [
   '',
   'intent: "build" (new program/feature/file), "edit" (change existing code), "debug" (fix an error or wrong behaviour), "explain" (explain code or a concept), "question" (anything else).',
   'size: "large" if it is a build that needs several distinct parts or more than ~40 lines (e.g. a whole program or game); otherwise "small".',
+  'logic: true if doing it needs programming logic the student should think through first (loops, conditions, calculations, data handling, an algorithm, fixing wrong behaviour); false for cosmetic or trivial changes (renaming, comments, formatting, changing a message or a constant) and for explain/question.',
   'detail (only matters for build/edit/debug; use "enough" for explain/question):',
   '- "enough": a reasonable programmer could do it without guessing any major behaviour. Be lenient; minor gaps are fine. Specific edits or selection-based requests are almost always "enough".',
   '- "needs_detail": important behaviour is unspecified. "reply" = at most 2 short, specific, friendly questions. No code.',
@@ -135,7 +196,7 @@ export const ROUTER_SYSTEM = [
   '- tip: ONE short, friendly, specific tip to make prompts like this better next time (or praise if it is already strong).',
   '- improved: a stronger version of THEIR prompt, in their voice, max 50 words.',
   '',
-  'Respond with ONLY JSON: {"intent":"...","size":"small|large","detail":"enough|needs_detail|unsure","reply":"","prompt_review":{"goal":0,"io":0,"details":0,"tip":"...","improved":"..."}}',
+  'Respond with ONLY JSON: {"intent":"...","size":"small|large","logic":true,"detail":"enough|needs_detail|unsure","reply":"","prompt_review":{"goal":0,"io":0,"details":0,"tip":"...","improved":"..."}}',
 ].join('\n');
 
 export function routerPrompt(projectListing: string, request: string, round: number, maxRounds: number, planText?: string): string {
@@ -156,8 +217,7 @@ export const PLAN_SYSTEM = [
   'You help a beginner vibe-code a program by splitting their request into small, buildable steps, the way an experienced developer would.',
   '- 2-5 steps. Each step adds one visible piece of behaviour and the program must run after every step. Step 1 is the simplest working core.',
   '- title: at most 8 words. detail: one sentence on what the step adds.',
-  '- think_question: ONE short question asking the student to think about the core logic (of step 1, or of the main algorithm if step 1 is trivial) in everyday terms BEFORE seeing any code. Example: "If you had five cards with numbers on them, how would you put them in order by hand?" No jargon, no code.',
-  'Respond with ONLY JSON: {"goal":"one-line goal","steps":[{"title":"...","detail":"..."}],"think_question":"..."}',
+  'Respond with ONLY JSON: {"goal":"one-line goal","steps":[{"title":"...","detail":"..."}]}',
 ].join('\n');
 
 export function planPrompt(projectListing: string, request: string): string {
@@ -229,12 +289,14 @@ const MCQ_RULES = [
   'No "all/none of the above". Test understanding (why it works, what a part is for, what would happen if it changed), not syntax trivia.',
   'Refer to file names and line numbers. Include any short snippet the student needs in the stem.',
   '"correct" is the 0-based index of the right choice; "explanation" is 1-2 sentences; "concept" is the programming concept tested (1-3 words).',
-  'Respond with ONLY JSON: {"questions":[{"stem":"...","choices":["...","...","...","..."],"correct":0,"explanation":"...","concept":"..."}]}',
+  '"change": ONLY for a question about what the program would PRINT after a change: {"find": "the exact existing line(s) of the file, copied without line numbers", "replace": "the same line(s) after the change"}. The change is run to check your answer, so each choice must state the exact output it predicts. Omit "change" for other questions.',
+  'Respond with ONLY JSON: {"questions":[{"stem":"...","choices":["...","...","...","..."],"correct":0,"explanation":"...","concept":"...","change":{"find":"...","replace":"..."}}]}',
 ].join('\n');
 
 export const CHANGE_QUIZ_SYSTEM = [
   'You write multiple-choice questions that check whether a student understands a code change they just accepted in their project.',
-  'Focus on THIS change: what it does, why it was needed, and how it affects the program\'s behaviour.',
+  'Focus on THIS change: why it is built this way and what would happen in a different situation (an edge case, another input or range, a line changed or removed). Example: "What would the program print if the loop started at -3 instead of 0?"',
+  'The student has ALREADY predicted and seen what the program prints as it is, so do NOT ask for its current output.',
   MCQ_RULES,
 ].join('\n');
 
@@ -269,15 +331,20 @@ export function projectQuizPrompt(contextText: string, count: number, avoid: str
 
 export const CHALLENGE_SYSTEM = [
   'You set a small "your turn" modification challenge for a beginner, based on code they just accepted (the Modify stage of PRIMM).',
+  'Give THREE candidate challenges, each a DIFFERENT kind of change; the best one is picked after running each solution. Every rule below applies to each candidate.',
   '- It must change the program\'s behaviour in a small, visible way, reuse the same concept, and be doable by changing about 1-6 lines. Examples: reverse the sort order, add a condition, change what is printed, handle an edge case.',
+  '- The changed program MUST print something different from the current one. Work out both outputs before choosing, and reject a change whose output stays the same (e.g. starting a sum at 1 instead of 0).',
   '- task: one or two sentences stating the goal (what the program should do), NOT which line to edit.',
   '- hint: one sentence pointing to where to look, without giving code.',
   '- criteria: how a grader can tell it is done (not shown to the student).',
-  'Respond with ONLY JSON: {"task":"...","hint":"...","criteria":"..."}',
+  '- solution: the edit that completes the task, as {"find": "exact existing line(s) copied from the file without line numbers", "replace": "the changed line(s)"} (not shown to the student). It is run to make sure the output really changes.',
+  'Respond with ONLY JSON: {"challenges":[{"task":"...","hint":"...","criteria":"...","solution":{"find":"...","replace":"..."}}, {…}, {…}]}',
 ].join('\n');
 
-export function challengePrompt(path: string, numberedFile: string, request: string, concepts: string[]): string {
+export function challengePrompt(path: string, numberedFile: string, request: string, concepts: string[], rejected?: string, currentOutput?: string): string {
   return [
+    currentOutput ? `THE PROGRAM CURRENTLY PRINTS:\n${currentOutput}\nYour change must make it print something DIFFERENT.` : '',
+    rejected ? `REJECTED: ${rejected} Pick a different kind of change, for example: only count some of the values (e.g. only even numbers), change where a repetition stops, print an extra value (e.g. how many numbers were added), or add a condition.` : '',
     `The student asked for: ${request}`,
     concepts.length ? `Concepts involved: ${concepts.join(', ')}` : '',
     '',
