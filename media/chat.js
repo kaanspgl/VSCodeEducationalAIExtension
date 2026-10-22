@@ -212,7 +212,7 @@
   let progressOpen = false;
   const STAGE_ICON = { predict: '🔮', tour: '🧭', check: '🔍', challenge: '🛠' };
   const LEVELS = [
-    { v: 'guided', label: 'Structured', desc: 'Explain the idea and write the steps before the AI codes, then predict, run, investigate and modify its code. Best for learning.' },
+    { v: 'guided', label: 'Structured', desc: 'Explain the idea, get the code and walk through it together, then predict, run and modify it. Best for learning.' },
     { v: 'light', label: 'Light', desc: 'The learning tools are on each change whenever you want them; nothing is required.' },
     { v: 'off', label: 'Regular vibe coding', desc: 'The AI writes code straight from your request.' },
   ];
@@ -302,13 +302,12 @@
   function structuredBar() {
     const st = view.structured;
     if (!st) return '';
-    const steps = ['Explain the idea', 'Write the steps', 'Read the code'];
-    const primm = { accept: 'accept the code', predict: 'predict & run', tour: 'investigate', check: 'investigate', challenge: 'modify' };
-    const sub = st.step === 3 ? (primm[st.primm] || '') : '';
+    const steps = st.labels || ['Explain the idea', 'Walk through the code', 'Predict, run & modify'];
+    const sub = st.sub || '';
     return `<div class="stepbar" title="Structured vibe coding">${steps.map((label, i) => {
       const n = i + 1;
       const cls = n < st.step ? 'done' : n === st.step ? 'now' : '';
-      const extra = n === 3 && n === st.step && sub ? ` <span class="muted">· ${esc(sub)}</span>` : '';
+      const extra = n === st.step && sub ? ` <span class="muted">· ${esc(sub)}</span>` : '';
       return `<span class="sb ${cls}">${n < st.step ? '✓' : n}. ${label}${extra}</span>`;
     }).join('<span class="sbarrow">→</span>')}</div>`;
   }

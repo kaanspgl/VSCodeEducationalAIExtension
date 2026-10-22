@@ -1,6 +1,6 @@
 # VibeLearner: Vibe Coding That Teaches
 
-VibeLearner is a Visual Studio Code extension for **structured vibe coding**: students still get complete, working code from an AI, but the AI writes it only after the student has explained the idea and the steps, and the student then works through the AI's code the PRIMM way. It is the platform for the COSC 449 honours project *Structured Vibe Coding with VibeLearner* (Kaan Sapoglu, supervised by Dr. Abdallah Mohamed).
+VibeLearner is a Visual Studio Code extension for **structured vibe coding**: students still get complete, working code from an AI quickly, but they explain the idea first, and then learn the code after the fact by walking through it, predicting and running it, and changing it themselves (the PRIMM way). It is the platform for the COSC 449 honours project *Structured Vibe Coding with VibeLearner* (Kaan Sapoglu, supervised by Dr. Abdallah Mohamed).
 
 The design principle comes from the honours research behind the tool: **students should still get the code they ask for**. VibeLearner is not a tutor that withholds answers. It is a code-generating assistant whose interaction is structured so that using it also builds understanding.
 
@@ -15,24 +15,28 @@ The design principle comes from the honours research behind the tool: **students
 * **Editor commands**: *Explain Selection* (Ctrl+Alt+E) and *Change Selection…* from the right-click menu. **▶ Run** runs the active Python/JavaScript file and shows its output; interactive programs run in a terminal.
 
 ### Structured vibe coding: three steps
-PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019) is a common way to teach programming. AI tools now do the *Make* step for many students, without the reading and checking PRIMM puts around it. VibeLearner keeps that structure with the AI doing the *Make*: **the student keeps the thinking, and the AI does the typing.** Every request that needs programming logic goes through three steps:
+PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019) is a common way to teach programming. AI tools now do the *Make* step for many students, without the reading and checking PRIMM puts around it. VibeLearner keeps that structure with the AI doing the *Make*: **the student keeps the thinking, and the AI does the typing.** Getting working code stays easy; the learning happens around it. Every request that needs programming logic goes through three steps:
 
 | Step | What the student does | What the AI does |
 |---|---|---|
-| **1. Explain the idea** | Describes at a high level what the program needs to do, e.g. *repeat over the numbers 0 to 100, keep a running total, print it*. | Asks guiding questions until the key ideas are there. If the request already covers them, Step 1 is passed straight away. |
-| **2. Write the steps** | Describes every step in detail, in any form and without code, e.g. *"Start the total at zero, add each number from 0 to 100 to the total, then print the total."* | Checks that the steps are complete and would work, and points to the first problem with a question or a case to trace. |
-| **3. Read the code** | Works through the AI's code the PRIMM way (below). | Only now writes the code, from the student's steps, with a comment naming each step. |
+| **1. Explain the idea** | Says in a sentence or two what the program needs to do, e.g. *go through the numbers 0 to 100, keep a running total, print it*. | Asks guiding questions until the key ideas are there. If the request already covers them, this step is passed straight away. |
+| **2. Walk through the code** | Follows a guided walkthrough of the new code, then accepts it. | Writes the code right away from the student's idea, then explains it stop by stop, highlighting the lines in the editor and linking each part to the student's idea, **before** it is accepted. |
+| **3. Predict, run & modify** | Predicts what the program prints, answers a question about how it works, and makes a small change. | Runs the program and compares it with the prediction, asks a "what if" question, and sets and checks a small modification. |
 
-Step 3, in PRIMM order:
+Step 3 in detail:
 
 | | What happens |
 |---|---|
-| 🔮 **Predict & run** | The student reads the code and predicts what it prints, then the program actually runs and the guess is compared with the real output. |
-| 🧭 **Investigate: walk through** | A guided tour of the code that highlights lines in the editor, linking each part to the student's own steps. |
-| 🔍 **Investigate: questions** | A follow-up question about how it works (e.g. *what happens with a negative number?*). |
-| 🛠 **Modify** | A small change to make, by hand or by prompting the AI, then **Check my work**. |
+| 🔮 **Predict & run** | The student predicts the output, then the program actually runs and the guess is compared with the real output. |
+| 🔍 **Questions** | A "what would happen if…" question about the code (e.g. *what if the loop stopped before 100?*). |
+| 🛠 **Modify** | A small change that practises the same logic (e.g. *add only the even numbers*), done by hand or by prompting the AI, then **Check my work**. |
 
-Steps 1 and 2 are bounded: after `learning.maxRoundsPerStep` rounds (default 3), the tutor explains what is missing and moves on, and the log marks that step as *scaffolded*, so no one gets stuck. Trivial changes (renaming, comments, messages) skip Steps 1 and 2.
+**Checked against reality, not the AI's word.** Local models are often confidently wrong, so VibeLearner runs the code to keep its teaching honest:
+* the answer key of a "what if" question is checked by applying that change and running the program; a wrong key is corrected, and a question whose answers don't fit the real output is dropped;
+* every Modify challenge is checked by running its solution, and challenges that wouldn't change the output (e.g. "start the sum at 1 instead of 0") are rejected;
+* **Check my work** runs the student's program and compares its result with the challenge's solution, so wording differences don't matter and the feedback states what the program actually prints.
+
+Step 1 is bounded: after `learning.maxRoundsPerStep` rounds (default 3), the tutor explains what is missing and moves on, and the log marks it as *scaffolded*, so no one gets stuck. Trivial changes (renaming, comments, messages) skip Step 1. Setting `learning.requireSteps` adds the thesis plan's *Write the steps* step (every step in any form, checked before the code is written) between the idea and the code.
 
 Also included:
 * **📋 Plan**: big requests are split into 2–5 small, runnable steps, and each step goes through Steps 1–3.
@@ -45,7 +49,7 @@ Pick a mode on the Start screen or from the **Mode** dropdown in the header:
 
 | Mode | Behaviour | Study role |
 |---|---|---|
-| **Structured** (default) | Steps 1–3 above for every request that needs programming logic. | Treatment |
+| **Structured** (default) | Steps 1–3 above for every request that needs programming logic: explain the idea, walk through the code, predict, run and modify. | Treatment |
 | **Regular vibe coding** | The AI writes code straight from the request; no steps, coaching or learning tools. Same model and the same edit / diff / accept flow. | Comparison |
 | **Light** | The learning tools are offered as buttons on each change; nothing is required. | Everyday use |
 
@@ -87,11 +91,12 @@ The default local configuration is:
 | Setting | Default | Purpose |
 |---|---|---|
 | `vibelearner.learning.level` | `guided` | `guided` (structured), `off` (regular vibe coding), or `light` |
-| `vibelearner.learning.maxRoundsPerStep` | `3` | Guiding rounds for Step 1 and Step 2 before the tutor explains what is missing and moves on |
-| `vibelearner.learning.allowSkipSteps` | `true` | Show *Skip: just write the code* during Steps 1–2 (logged). Turn off if every request must go through the steps |
+| `vibelearner.learning.requireSteps` | `false` | Also ask the student to write every step before the code is written (the thesis plan's Step 2) |
+| `vibelearner.learning.maxRoundsPerStep` | `3` | Guiding rounds for explaining the idea (and writing the steps, if required) before the tutor explains what is missing and moves on |
+| `vibelearner.learning.allowSkipSteps` | `true` | Show *Skip: just write the code* while explaining the idea (logged). Turn off if every request must go through Step 1 |
 | `vibelearner.learning.clarify` | `true` | Ask clarifying questions for vague requests |
 | `vibelearner.learning.maxClarifications` | `2` | Clarifying rounds before building with stated assumptions |
-| `vibelearner.learning.questionsPerChange` | `1` | Questions in the 🔍 Investigate step |
+| `vibelearner.learning.questionsPerChange` | `1` | Questions in the 🔍 Questions step |
 | `vibelearner.learning.projectQuizQuestions` | `3` | Questions in *Quiz me on my program* |
 | `vibelearner.context.maxChars` | `24000` | How much of the project is sent per request (larger = more context, slower) |
 | `vibelearner.apiProvider` / `vibelearner.model` | `ollama` / `qwen3-coder:30b` | Model provider and model |
@@ -102,7 +107,7 @@ The default local configuration is:
 ## Research Use
 
 * **Consent-based logging**: on the Start screen, a participant enters a code and ticks consent. Nothing is logged without both.
-* **What is logged**: one JSONL file per participant, stored locally. Every event is tagged with the condition (`vibe:guided` = structured, `vibe:off` = regular). Events cover requests, prompt-quality scores, plans, every Step 1 idea and Step 2 steps answer with the AI's verdict (and whether the step was passed unaided, scaffolded or skipped), every proposed / accepted / rejected change (with content), whether the code was read (diff, walkthrough or prediction), predictions against the real output, investigate answers, and *your turn* outcomes (by hand or via the AI). Model waiting time is recorded separately from student time.
+* **What is logged**: one JSONL file per participant, stored locally. Every event is tagged with the condition (`vibe:guided` = structured, `vibe:off` = regular). Events cover requests, prompt-quality scores, plans, every idea (and steps) answer with the AI's verdict (and whether it was passed unaided, scaffolded or skipped), walkthroughs, every proposed / accepted / rejected change (with content), whether the code was read (diff, walkthrough or prediction), predictions against the real output, question answers with how each answer key was checked (verified, corrected or dropped), and Modify outcomes (by hand or via the AI, and whether the run or the model decided). Model waiting time is recorded separately from student time.
 * **Finding the logs**: run **VibeLearner: Reveal Study Logs**.
 * **Before collecting data**: freeze the prompts (`src/vibe/prompts.ts`, `VIBE_PROMPT_VERSION` is written to the log), the model and the settings.
 * **Study workflow** (`vibelearner.workflow = study`): the fixed-task workflow is kept for controlled studies. It has instructor-reviewed tasks with unit tests, a request check, code generation, review, a check (multiple-choice quiz, then predict-then-run), a post-task survey, and a direct-generation control condition.
@@ -165,10 +170,10 @@ VibeLearner is a standard VS Code extension: a thin webview UI and an extension-
 **Backend (extension host)**
 - `src/extension.ts`: entry point, command registration, editor listeners
 - `src/panels/ChatPanel.ts`: webview controller and message routing
-- `src/vibe/session.ts`: project mode, including the request → coach → plan → Steps 1–2 → build → Step 3 (PRIMM) state machine
+- `src/vibe/session.ts`: project mode, including the request → coach → plan → Step 1 → build → walkthrough → Step 3 state machine, and the run-based checks of answer keys, challenges and Check my work
 - `src/vibe/context.ts`: builds whole-project context within a character budget, scoped to the current project folder
 - `src/vibe/edits.ts`: SEARCH/REPLACE parsing, fuzzy matching, fenced-code fallback, proposed-content provider for diffs
-- `src/vibe/prompts.ts`: every prompt (Step 1 idea check, Step 2 steps check, action, router + prompt coach, plan, walkthrough, predict feedback, questions, modify challenges)
+- `src/vibe/prompts.ts`: every prompt (idea check, optional steps check, action, router + prompt coach, plan, walkthrough, predict feedback, questions, modify challenges)
 - `src/study/runner.ts`: runs programs and unit tests with captured output and timeouts
 - `src/study/logger.ts`: append-only, consent-gated JSONL log
 - `src/study/session.ts`, `src/study/tasks.ts`: the fixed-task study workflow and its task bank
@@ -177,10 +182,10 @@ VibeLearner is a standard VS Code extension: a thin webview UI and an extension-
 **Data Flow**
 1. The student types a request (optionally with code selected and a target file chosen).
 2. The webview posts it to the extension host.
-3. In Structured and Light mode, a router call classifies the request, coaches the prompt, and decides whether to clarify, plan, or (in Structured) start Steps 1 and 2.
-4. Once the steps are ready, `context.ts` gathers the project and the action call writes the code from the student's steps, returning an explanation and edit blocks.
+3. In Structured and Light mode, a router call classifies the request, coaches the prompt, and decides whether to clarify, plan, or (in Structured) start Step 1.
+4. Once the idea is there, `context.ts` gathers the project and the action call writes the code from the student's idea, returning an explanation and edit blocks.
 5. Edits are matched against the real files (with an automatic repair retry) and shown as change cards with diffs.
-6. After **Accept**, the file is written and Step 3 runs in PRIMM order: predict & run, investigate (walkthrough and questions), modify.
+6. In Structured mode the walkthrough runs on the proposed code (Step 2). After **Accept**, the file is written and Step 3 runs: predict & run, a question, modify, each checked by running the code.
 7. Every step updates the progress panel and, if consented, the research log.
 
 ## Security and Privacy

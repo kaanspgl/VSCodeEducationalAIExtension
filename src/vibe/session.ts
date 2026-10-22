@@ -5,15 +5,15 @@ import { StudyLogger } from '../study/logger';
 import { extractJson, stripThinking } from '../study/prompts';
 import { interpreterFor, runFile, runProgram } from '../study/runner';
 import { buildContext, listFiles, numbered, ProjectContext, quickInfo } from './context';
-import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, parseBlocks, ProposedContent } from './edits';
+import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, locateLines, parseBlocks, ProposedContent } from './edits';
 import * as P from './prompts';
 
 type Level = P.Level;
 type Stage = 'tour' | 'predict' | 'check' | 'challenge';
 type StageStatus = 'todo' | 'active' | 'done' | 'skipped' | 'na';
-// Step 3 follows PRIMM: predict and run first, then investigate (walkthrough + questions), then modify.
-const STAGES: Stage[] = ['predict', 'tour', 'check', 'challenge'];
-const STAGE_LABEL: Record<Stage, string> = { predict: 'Predict & run', tour: 'Walk through', check: 'Questions', challenge: 'Modify' };
+// After the code is written: walk through it (before accepting), then predict & run, a question, and a change to make.
+const STAGES: Stage[] = ['tour', 'predict', 'check', 'challenge'];
+const STAGE_LABEL: Record<Stage, string> = { tour: 'Walk through', predict: 'Predict & run', check: 'Questions', challenge: 'Modify' };
 const INPUT_RE = /\binput\s*\(|sys\.stdin|readline|process\.stdin|prompt\s*\(/;
 
 export type VibeChange = {
@@ -52,8 +52,8 @@ export type VibeView = {
   placeholder: string;
   draft?: string;
   quiz?: { label: string; index: number; total: number; stem: string; choices: string[] };
-  /** Structured vibe coding progress for the current request: 1 explain the idea, 2 write the steps, 3 read the code. */
-  structured?: { step: 1 | 2 | 3; primm?: string };
+  /** Structured vibe coding progress for the current request: the three step names (which depend on requireSteps), the current step, and what is happening in it. */
+  structured?: { labels: string[]; step: number; sub?: string };
   tour?: { index: number; total: number; title: string; text: string; path: string; start: number; end: number; pending: boolean };
   plan?: { goal: string; steps: { title: string; status: string }[]; next?: { index: number; title: string }; remaining: number };
   concepts: { name: string; seen: number; right: number; total: number }[];
@@ -78,14 +78,14 @@ type Proposal = {
   card: VibeChange;
   planStep?: number;
   planAll?: boolean;
-  /** Part of structured vibe coding: Step 3 (PRIMM) runs on it automatically in guided mode. */
+  /** Part of structured vibe coding: the walkthrough, then predict, question and modify, run on it automatically in guided mode. */
   structured: boolean;
   idea?: string;
   steps?: string;
   viewedDiff: boolean;
   toured: boolean;
   learn: Record<Stage, StageStatus>;
-  challenge?: { task: string; hint: string; criteria: string; baseline: string; msgId: number; viaAi: boolean; open: boolean };
+  challenge?: { task: string; hint: string; criteria: string; baseline: string; msgId: number; viaAi: boolean; open: boolean; before?: string; expected?: string };
   nextPrompted?: boolean;
 };
 
@@ -97,7 +97,7 @@ type Plan = {
 
 type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean };
 
-/** Steps 1 and 2 of structured vibe coding, before any code is written. */
+/** Before any code is written: explain the idea (and, with requireSteps, write the steps). */
 type Gate = {
   request: string;
   opts: ActOpts;
@@ -145,8 +145,10 @@ export class VibeSession {
   private lastRequest: { text: string; opts: ActOpts; student?: { idea?: string; steps?: string } } | undefined;
   private maxRoundsPerStep = 3;
   private allowSkipSteps = true;
+  /** Optional "write every step before the code" step (off by default: the code comes right after the idea). */
+  private requireSteps = false;
   private gate: Gate | undefined;
-  /** The structured change the 1-2-3 bar follows; cleared when a new request starts. */
+  /** The structured change the 1-2-3 bar follows; cleared when a new structured request starts (not by questions along the way). */
   private currentStructured: string | undefined;
 
   private history: ChatMsg[] = [];
@@ -198,6 +200,7 @@ export class VibeSession {
     this.model = cfg.get<string>('model') || cfg.get<string>('defaultModel') || 'qwen3-coder:30b';
     this.maxRoundsPerStep = clamp(cfg.get<number>('learning.maxRoundsPerStep') ?? 3, 1, 8);
     this.allowSkipSteps = cfg.get<boolean>('learning.allowSkipSteps') ?? true;
+    this.requireSteps = cfg.get<boolean>('learning.requireSteps') ?? false;
 
     const code = (participant ?? '').trim();
     // The Start-screen picker applies only outside research sessions; study conditions come from settings.
@@ -211,7 +214,7 @@ export class VibeSession {
       this.logger.log('vibe_session', undefined, {
         promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: cfg.get('apiProvider'), temperature: cfg.get('temperature'),
         level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
-        maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, questionsPerChange: this.perChange,
+        maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
         projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
       });
     }
@@ -225,10 +228,10 @@ export class VibeSession {
     } else if (this.level === 'guided') {
       this.say('tutor',
         'Hi! I\'m your vibe-coding partner. Tell me what you want to build, change or fix. I can see your whole project, and if you select code first I\'ll focus on that.\n\n' +
-        'Before I write code, we\'ll go through three steps:\n' +
-        '1. **Explain the idea**: what the program needs to do, in a sentence or two.\n' +
-        '2. **Write the steps**: every step, in your own words. No code needed.\n' +
-        '3. **Read the code**: I write it from your steps, then you predict what it does, run it, investigate how it works, and change it.\n\n' +
+        'For anything that needs real logic, we\'ll go through three steps:\n' +
+        '1. **Explain the idea**: tell me in a sentence or two what the program needs to do.\n' +
+        '2. **Walk through the code**: I write it from your idea, then we go through it together before you accept it.\n' +
+        '3. **Predict, run & modify**: guess what it prints, run it, answer a question about it, and make a small change yourself.\n\n' +
         'You keep the thinking; I do the typing.');
     } else {
       this.say('tutor',
@@ -254,11 +257,12 @@ export class VibeSession {
     if (this.awaiting?.kind === 'gate') return this.guard(() => this.handleGate(text));
 
     const snapshot = { msgs: this.view.messages.length, hist: this.history.length, round: this.clarRound };
-    this.currentStructured = undefined;
     this.setBusy(true, 'Reading your project…');
     let ctx: ProjectContext;
     try {
       ctx = await buildContext(this.maxChars, this.projectDir);
+      // A question during a walkthrough is about the code being walked through, which may not be accepted yet.
+      if (this.tour) ctx = { ...ctx, text: ctx.text + this.tourNote() };
     } catch (err: any) {
       this.setBusy(false);
       this.say('system', `⚠️ Couldn't read the project: ${err?.message || err}`);
@@ -303,7 +307,7 @@ export class VibeSession {
           const planned = await this.makePlan(text, ctx);
           if (planned) return this.refresh();
         }
-        // Structured vibe coding: requests that need programming logic go through Steps 1 and 2 first.
+        // Structured vibe coding: requests that need programming logic start with Step 1 (explain the idea).
         const needsLogic = route ? ['build', 'edit', 'debug'].includes(route.intent) && route.logic !== false : false;
         if (this.level === 'guided' && needsLogic) {
           await this.startGate(text, { structured: true });
@@ -359,6 +363,7 @@ export class VibeSession {
     const concepts = this.level === 'off' ? [] : split.concepts;
     this.history.push({ role: 'user', content: request }, { role: 'assistant', content: shown.slice(0, 1500) });
 
+    blocks = await this.fixPaths(blocks, ctx);
     blocks = await this.repairIfNeeded(blocks, request);
     const cards = await this.makeProposals(blocks, request, concepts, ctx, opts, student);
     if (!blocks.length) concepts.forEach(c => this.bumpSeen(c));
@@ -369,14 +374,17 @@ export class VibeSession {
     }, res.ms);
 
     const hint = cards.some(c => c.status === 'pending') && this.level === 'guided' && opts.structured
-      ? '\n\n**Step 3: Read the code.** ' + (student?.steps ? 'I wrote it from your steps. ' : '') +
-        'Press **Accept** to add it to your project. Then we\'ll read it the PRIMM way: **predict** what it prints, **run** it, **investigate** how it works, and **modify** it.'
+      ? '\n\n' + (this.requireSteps
+        ? '**Step 3: Read the code.** I wrote it from your steps. Let\'s walk through it, then you can accept it and we\'ll predict, run and modify it.'
+        : '**Step 2: Walk through the code.** I wrote it from your idea. Let\'s go through it together before you accept it.')
       : '';
     this.view.messages.push({
       id: ++this.msgSeq, role: 'tutor',
       text: (shown || (blocks.length ? 'Here are the changes:' : '(no reply)')) + hint,
       changes: cards.length ? cards : undefined,
     });
+    const first = cards.find(c => c.status === 'pending');
+    if (first && this.level === 'guided' && opts.structured) await this.startStage(first.id, 'tour');
     if (cards.some(c => c.status === 'failed')) {
       this.say('system', 'Some edits still didn\'t match your current code, even after a second try.', [
         { label: 'Try again', cmd: 'retryLast' },
@@ -441,16 +449,19 @@ export class VibeSession {
     this.logger.log('vibe_plan', undefined, { goal: this.plan.goal, steps: steps.map(s => s.title) });
 
     const intro = `Let's build this in **${steps.length} small steps**. That's how experienced vibe coders work: build a little, check it runs, then add more.\n\n${list}`;
-    this.say('tutor', intro + (this.level === 'guided' ? '\n\nWe\'ll do each step the structured way: explain the idea, write the steps, then read the code.' : ''), [
+    const structured = this.requireSteps ? 'explain the idea, write the steps, then read the code' : 'explain the idea, walk through the code, then predict, run and modify it';
+    this.say('tutor', intro + (this.level === 'guided' ? `\n\nWe'll do each step the structured way: ${structured}.` : ''), [
       { label: this.level === 'guided' ? 'Start step 1' : 'Build step 1', cmd: 'buildNext', primary: true },
       { label: 'Do it all at once', cmd: 'buildAll' },
     ]);
     return true;
   }
 
-  // ================================================================== Steps 1 and 2 (before any code)
+  // ================================================================== explain the idea (and write the steps), before any code
 
   private async startGate(request: string, opts: ActOpts) {
+    // A new structured request: the 1-2-3 bar follows the change it produces.
+    this.currentStructured = undefined;
     const g: Gate = {
       request, opts: { ...opts, structured: true }, step: 1, rounds: 0, turns: [{ role: 'student', text: request }],
       ideaParts: [request], idea: '', steps: '', keyIdeas: [], scaffolded: { idea: false, steps: false }, msgIds: [],
@@ -464,13 +475,13 @@ export class VibeSession {
     const res = await this.ideaCheck(g);
     this.setBusy(false);
     if (res?.verdict === 'enough') {
-      this.gateSay(`Before I write any code, three steps: **1. Explain the idea → 2. Write the steps → 3. Read the code.**\n\n✅ **Step 1: Explain the idea.** Your request already covers it. ${stripThinking(res.reply || '')}`);
-      return this.toSteps();
+      this.gateSay(`${this.flowLine()}\n\n✅ **Step 1: Explain the idea.** Your request already covers it. ${stripThinking(res.reply || '')}`);
+      return this.afterIdea();
     }
     const question = res?.reply ? stripThinking(res.reply) : 'What does the program need to repeat or decide, what does it keep track of, and what does it show at the end?';
     g.turns.push({ role: 'tutor', text: question });
     this.gateSay(
-      `Before I write any code, three steps: **1. Explain the idea → 2. Write the steps → 3. Read the code.**\n\n` +
+      `${this.flowLine()}\n\n` +
       `**Step 1: Explain the idea.** In a sentence or two, what does the program need to do? ${question}`);
   }
 
@@ -502,14 +513,14 @@ export class VibeSession {
       const reply = res?.reply ? stripThinking(res.reply) : '';
       if (!res || res.verdict === 'enough') {
         this.gateSay(`✅ ${reply || 'That\'s the idea.'}`);
-        return this.toSteps();
+        return this.afterIdea();
       }
       if (final) {
         // Bounded: explain what is missing and move on, so nobody gets stuck (logged as scaffolded).
         g.scaffolded.idea = true;
         g.ideaParts.push(`(explained by the tutor: ${reply})`);
-        this.gateSay(`${reply}\n\nLet's carry that idea into the steps.`);
-        return this.toSteps();
+        this.gateSay(this.requireSteps ? `${reply}\n\nLet's carry that idea into the steps.` : `${reply}\n\nLet's see how the code does it: I'll write it and we'll walk through it together.`);
+        return this.afterIdea();
       }
       g.turns.push({ role: 'tutor', text: reply });
       this.gateSay(reply);
@@ -558,7 +569,7 @@ export class VibeSession {
     this.stats.gates++;
     if (!g.scaffolded.idea && !g.scaffolded.steps) this.stats.gatesUnaided++;
     this.logger.log('vibe_gate', undefined, { kind: 'done', request: g.request, idea: g.idea, steps: g.steps, scaffolded: g.scaffolded, keyIdeas: g.keyIdeas });
-    const steps = g.stepsNote ? `${g.steps}\n(Tutor note: ${g.stepsNote})` : g.steps;
+    const steps = !g.steps ? undefined : g.stepsNote ? `${g.steps}\n(Tutor note: ${g.stepsNote})` : g.steps;
     this.setBusy(true, 'Reading your project…');
     const ctx = await buildContext(this.maxChars, this.projectDir);
     await this.act(g.request, ctx, g.opts, { idea: g.idea, steps });
@@ -577,7 +588,7 @@ export class VibeSession {
     await this.act(g.request, ctx, g.opts, g.idea || g.ideaParts.length > 1 ? { idea: g.idea || g.ideaParts.join(' / ') } : undefined);
   }
 
-  /** A tutor message during Steps 1-2; carries the skip button (if allowed) on the latest message only. */
+  /** A tutor message before the code is written; carries the skip button (if allowed) on the latest message only. */
   private gateSay(text: string) {
     const g = this.gate;
     g?.msgIds.forEach(id => this.clearButtons(id));
@@ -709,6 +720,12 @@ export class VibeSession {
     if (!p || p.card.status !== 'pending') return;
     const uri = this.fileUri(p.path);
 
+    if (await isFolder(uri)) {
+      p.card.status = 'failed';
+      p.card.note = `${p.path} is a folder, not a file. Ask again (or pick a file in "Code goes in").`;
+      this.logger.log('vibe_change', undefined, { id, path: p.path, status: 'path_is_folder' });
+      return;
+    }
     const current = await readCurrent(uri);
     // Re-apply to what is on disk/in the editor now, in case the student edited since the proposal.
     let content = p.newContent;
@@ -795,16 +812,16 @@ export class VibeSession {
     if (status !== 'active') await this.advance(id);
   }
 
-  /** Guided mode: run Step 3 (predict, run, investigate, modify) on structured changes. Both modes: offer the next plan step when done. */
+  /** Guided mode: run the walkthrough (before accepting), then predict, question and modify on structured changes. Both modes: offer the next plan step when done. */
   private async advance(id: string) {
     const p = this.proposals.get(id);
     if (!p) return;
     if (this.level === 'guided' && p.structured) {
-      if (p.card.status !== 'accepted') return;
       for (const s of STAGES) {
         const st = p.learn[s];
         if (st === 'done' || st === 'skipped' || st === 'na') continue;
         if (st === 'active') return;
+        if (s !== 'tour' && p.card.status !== 'accepted') return;
         return this.startStage(id, s);
       }
     }
@@ -824,25 +841,32 @@ export class VibeSession {
       [{ label: this.level === 'guided' ? `Start step ${k + 1}` : `Build step ${k + 1}`, cmd: 'buildNext', primary: true }]);
   }
 
-  // ---- 1. Walkthrough (Investigate), shown in the real editor
+  // ---- 1. Walkthrough, shown in the real editor (on the proposed code, before it is accepted)
   private async startTour(p: Proposal) {
     const pending = p.card.status === 'pending';
     const content = pending ? p.newContent : ((await readCurrent(this.fileUri(p.path))) ?? p.newContent);
     const lines = content.replace(/\r\n/g, '\n').split('\n');
 
     this.setBusy(true, 'Preparing a walkthrough…');
-    const res = await this.askJson<{ stops: { start: number; end?: number; title: string; text: string }[] }>(
+    const res = await this.askJson<{ stops: { code?: string; start: number; end?: number; title: string; text: string }[] }>(
       P.TOUR_SYSTEM, P.tourPrompt(p.path, numbered(lines), changeText(p), p.request, [p.idea, p.steps && `Their steps: ${p.steps}`].filter(Boolean).join('\n') || undefined),
       v => Array.isArray(v.stops) && v.stops.length > 0
     );
     this.setBusy(false);
+    let relocated = 0;
     const stops = (res?.stops ?? [])
       .map(s => {
-        const start = clamp(Number(s.start) || 1, 1, lines.length);
-        return { start, end: clamp(Number(s.end ?? s.start) || start, start, Math.min(lines.length, start + 14)), title: stripThinking(String(s.title ?? '')), text: stripThinking(String(s.text ?? '')) };
+        // Highlight where the quoted code really is; the model's line numbers are only a hint.
+        const found = typeof s.code === 'string' ? locateLines(lines, s.code, Number(s.start) || undefined) : undefined;
+        const hintStart = clamp(Number(s.start) || 1, 1, lines.length);
+        const range = found ?? { start: hintStart, end: clamp(Number(s.end ?? s.start) || hintStart, hintStart, lines.length) };
+        if (found && (found.start !== Number(s.start) || found.end !== Number(s.end ?? s.start))) relocated++;
+        return { ...range, title: stripThinking(String(s.title ?? '')), text: stripThinking(String(s.text ?? '')) };
       })
       .filter(s => s.text)
-      .slice(0, 7);
+      // Top to bottom, so the highlight moves down the file instead of jumping around.
+      .sort((a, b) => a.start - b.start || a.end - b.end)
+      .slice(0, 8);
     if (!stops.length) {
       this.say('system', 'I couldn\'t prepare a walkthrough for that change.');
       return this.markStage(p.id, 'tour', 'na');
@@ -851,8 +875,8 @@ export class VibeSession {
     const uri = pending ? ProposedContent.put(`${p.id}-tour`, path.posix.basename(p.path), content) : this.fileUri(p.path);
     this.tour = { id: p.id, stops, index: 0, uri, pending };
     p.learn.tour = 'active';
-    this.logger.log('vibe_learn', undefined, { kind: 'tour_start', id: p.id, stops: stops.length, pending });
-    if (!pending && p.structured) this.say('tutor', '🧭 **Investigate:** let\'s walk through how it works. Follow the highlighted lines in the editor.');
+    this.logger.log('vibe_learn', undefined, { kind: 'tour_start', id: p.id, stops: stops.length, relocated, pending });
+    if (p.structured) this.say('tutor', '🧭 **Walkthrough:** follow the highlighted lines in the editor and press **Next** to move on. Ask me about anything that isn\'t clear.');
     await this.showTourStop();
   }
 
@@ -1027,6 +1051,7 @@ export class VibeSession {
    */
   private async verifyQuestions(p: Proposal, qs: Mcq[]): Promise<Mcq[]> {
     const kept: Mcq[] = [];
+    const current = qs.some(q => q.change) ? (await this.runWithEdit(p, undefined)).output : undefined;
     for (const q of qs) {
       if (!q.change) { kept.push(q); continue; }
       const out = await this.runWithEdit(p, q.change);
@@ -1036,9 +1061,10 @@ export class VibeSession {
         kept.push(q);
         continue;
       }
-      const matches = q.choices.map((c, i) => (containsTokens(c, actual) ? i : -1)).filter(i => i >= 0);
-      const verdict = matches.length === 1 && matches[0] === q.correct ? 'verified' : matches.length === 1 ? 'corrected' : 'dropped';
-      this.logger.log('vibe_learn', undefined, { kind: 'question_check', id: p.id, stem: q.stem, verdict, actual, aiKey: q.correct, matches });
+      const matches = matchChoices(q.choices, actual, current);
+      // Running settles the output, not the reasoning: if several choices fit and the AI's key is one of them, keep it.
+      const verdict = matches.includes(q.correct) ? 'verified' : matches.length === 1 ? 'corrected' : 'dropped';
+      this.logger.log('vibe_learn', undefined, { kind: 'question_check', id: p.id, stem: q.stem, choices: q.choices, change: q.change, verdict, actual, current, aiKey: q.correct, matches });
       if (verdict === 'dropped') continue;
       if (verdict === 'corrected') {
         q.correct = matches[0];
@@ -1084,6 +1110,7 @@ export class VibeSession {
     // Pick the first candidate whose solution, when run, really changes the output. A candidate we can't
     // run (no or unusable solution) is a fallback; one that prints the same is never used.
     let res: Candidate | undefined;
+    let expected: string | undefined;
     let fallback: Candidate | undefined;
     const rejected: string[] = [];
     for (let round = 0; round < 2 && !res; round++) {
@@ -1094,7 +1121,7 @@ export class VibeSession {
         const after = c.solution ? await this.runWithEdit(p, c.solution) : { output: undefined, reason: 'no solution given' };
         const same = after.output !== undefined && after.output === before.output;
         this.logger.log('vibe_learn', undefined, { kind: 'challenge_check_solution', id: p.id, task: c.task, before: before.output, after: after.output, reason: after.reason, same });
-        if (after.output !== undefined && !same) { res = c; break; }
+        if (after.output !== undefined && !same) { res = c; expected = after.output; break; }
         if (same) rejected.push(c.task);
         else fallback = fallback ?? c;
       }
@@ -1111,7 +1138,7 @@ export class VibeSession {
         { label: 'Check my work', cmd: 'challengeCheck', arg: p.id, primary: true },
         { label: 'Skip', cmd: 'challengeSkip', arg: p.id },
       ]);
-    p.challenge = { task, hint: stripThinking(String(res.hint ?? '')), criteria: String(res.criteria ?? ''), baseline: code, msgId: msg.id, viaAi: false, open: true };
+    p.challenge = { task, hint: stripThinking(String(res.hint ?? '')), criteria: String(res.criteria ?? ''), baseline: code, msgId: msg.id, viaAi: false, open: true, before: before.output, expected };
     p.learn.challenge = 'active';
     this.stats.chGiven++;
     this.logger.log('vibe_learn', undefined, { kind: 'challenge_start', id: p.id, task, criteria: res.criteria });
@@ -1136,15 +1163,35 @@ export class VibeSession {
       return;
     }
     this.setBusy(true, 'Checking your work…');
-    const r = await this.askJson<{ done: boolean; feedback: string }>(
-      P.CHALLENGE_CHECK_SYSTEM,
-      P.challengeCheckPrompt(c.task, c.criteria, p.path, numbered(c.baseline.split('\n')), numbered(now.split('\n'))),
-      v => typeof v.done === 'boolean'
-    );
+    // Ground truth first: run their program and compare with what the challenge's own solution prints.
+    const ran = c.expected !== undefined && c.before !== undefined ? await this.runWithEdit(p, undefined) : undefined;
+    const runVerdict = ran?.output !== undefined ? sameResult(ran.output, c.expected!, c.before!) : undefined;
+    let done: boolean;
+    let feedback: string;
+    if (runVerdict === true) {
+      done = true;
+      feedback = `It works: your program now prints\n\`\`\`\n${ran!.output}\n\`\`\`\nwhich is exactly what the challenge asked for.`;
+    } else if (runVerdict === false) {
+      // The run is decisive; state the facts instead of asking the model (which can misdescribe the edit).
+      done = false;
+      feedback = `Not quite yet. Your program now prints\n\`\`\`\n${ran!.output}\n\`\`\`\nbut for this challenge it should print\n\`\`\`\n${c.expected}\n\`\`\`\nCompare the two and look at which part of your change affects that result. Press **Hint** if you're stuck.`;
+    } else {
+      const r = await this.askJson<{ done: boolean; feedback: string }>(
+        P.CHALLENGE_CHECK_SYSTEM,
+        P.challengeCheckPrompt(c.task, c.criteria, p.path, numbered(c.baseline.split('\n')), numbered(now.split('\n')), ran?.output),
+        v => typeof v.done === 'boolean'
+      );
+      // When the run shows the wrong result, the run wins over the model's opinion.
+      done = runVerdict === false ? false : !!r?.done;
+      feedback = r?.feedback ? stripThinking(r.feedback) : '';
+      if (runVerdict === false && (r?.done || !feedback)) {
+        feedback = `Not quite yet: your program now prints\n\`\`\`\n${ran!.output}\n\`\`\`\nCheck your change against the task.`;
+      }
+      if (!feedback) feedback = done ? 'Looks done!' : 'Not quite yet.';
+    }
     this.setBusy(false);
-    const done = !!r?.done;
-    this.logger.log('vibe_learn', undefined, { kind: 'challenge_check', id, done, via: c.viaAi ? 'ai' : 'self', code: now });
-    this.say('tutor', `${done ? '🎉' : '🔍'} ${r?.feedback ? stripThinking(r.feedback) : (done ? 'Looks done!' : 'Not quite yet.')}`);
+    this.logger.log('vibe_learn', undefined, { kind: 'challenge_check', id, done, decidedBy: runVerdict === undefined ? 'model' : 'run', output: ran?.output, expected: c.expected, via: c.viaAi ? 'ai' : 'self', code: now });
+    this.say('tutor', `${done ? '🎉' : '🔍'} ${feedback}`);
     if (!done) return;
     c.open = false;
     this.stats.chDone++;
@@ -1183,7 +1230,7 @@ export class VibeSession {
     }));
     this.quiz = { kind, items, index: 0, right: 0, changeId, fallbackConcepts };
     this.say('tutor', kind === 'change'
-      ? '🔍 **Investigate:** a question about how your code works:'
+      ? '🔍 **Question:** about how your code works:'
       : `Quiz on your program: ${items.length} question${items.length > 1 ? 's' : ''}.`);
     this.logQuizQuestion();
   }
@@ -1331,7 +1378,7 @@ export class VibeSession {
       this.awaiting = undefined;
     }
     if (level !== 'guided' && this.gate) void this.skipSteps();
-    const desc = level === 'guided' ? 'Structured vibe coding: explain the idea and write the steps before I code, then predict, run, investigate and modify.'
+    const desc = level === 'guided' ? 'Structured vibe coding: explain the idea, get the code and walk through it together, then predict, run and modify it.'
       : level === 'light' ? 'Learning tools are on each change whenever you want them.'
       : 'Regular vibe coding: I write code straight from your request.';
     this.say('system', `Mode: **${conditionLabel(level)}**. ${desc}`);
@@ -1363,6 +1410,31 @@ export class VibeSession {
     this.projectDir = undefined;
     this.plan = undefined;
     await this.touchNow();
+  }
+
+  /**
+   * Models sometimes name a folder as the file (e.g. "test" right after New project), leave out the extension,
+   * or write outside the current project folder. Fix those paths before the student ever sees the change.
+   */
+  private async fixPaths(blocks: EditBlock[], ctx: ProjectContext): Promise<EditBlock[]> {
+    if (!blocks.length || !ctx.folder) return blocks;
+    const remap = new Map<string, string>();
+    for (const b of blocks) {
+      if (remap.has(b.path)) continue;
+      let p = b.path;
+      const sample = blocks.filter(x => x.path === b.path).map(x => x.replace).join('\n');
+      const ext = guessExtension(sample, ctx);
+      // outside the project folder the student is working in -> into it
+      if (this.projectDir && p !== this.projectDir && !p.startsWith(this.projectDir + '/')) p = `${this.projectDir}/${p.split('/').pop()}`;
+      if (await isFolder(this.fileUri(p)) || p === this.projectDir) {
+        p = `${p}/main.${ext}`; // a folder -> a file inside it
+      } else if (!/\.[A-Za-z0-9]+$/.test(p.split('/').pop() ?? '') && !(await readCurrent(this.fileUri(p)))) {
+        p = `${p}.${ext}`; // a new file without an extension
+      }
+      remap.set(b.path, p);
+      if (p !== b.path) this.logger.log('vibe_change', undefined, { status: 'path_fixed', from: b.path, to: p });
+    }
+    return blocks.map(b => ({ ...b, path: remap.get(b.path) ?? b.path }));
   }
 
   /** If some SEARCH text doesn't match, ask the model once more with the exact file contents. */
@@ -1517,15 +1589,49 @@ export class VibeSession {
     v.draft = undefined;
   }
 
-  /** What the 1-2-3 bar shows: the gate step, or Step 3 with the current PRIMM stage of the latest structured change. */
+  /** What the 1-2-3 bar shows: the gate step, or where the latest structured change is (walkthrough, or predict / question / modify). */
   private structuredProgress(): VibeView['structured'] {
     if (this.level !== 'guided') return undefined;
-    if (this.gate) return { step: this.gate.step };
+    const labels = this.requireSteps
+      ? ['Explain the idea', 'Write the steps', 'Read the code']
+      : ['Explain the idea', 'Walk through the code', 'Predict, run & modify'];
+    if (this.gate) return { labels, step: this.gate.step };
     const latest = this.currentStructured ? this.proposals.get(this.currentStructured) : undefined;
     if (!latest || latest.card.status === 'rejected' || latest.card.status === 'failed') return undefined;
-    if (latest.card.status === 'pending') return { step: 3, primm: 'accept' };
     const next = STAGES.find(s => latest.learn[s] === 'active' || latest.learn[s] === 'todo');
-    return next ? { step: 3, primm: next } : undefined;
+    const sub = latest.card.status === 'pending' && latest.learn.tour !== 'active' ? 'accept the code'
+      : next === 'predict' ? 'predict & run' : next === 'check' ? 'question' : next === 'challenge' ? 'modify' : next === 'tour' ? 'walkthrough' : '';
+    if (!next && latest.card.status === 'accepted') return undefined;
+    if (this.requireSteps) return { labels, step: 3, sub };
+    const inWalkthrough = latest.card.status === 'pending' || next === 'tour';
+    return { labels, step: inWalkthrough ? 2 : 3, sub: inWalkthrough ? (latest.card.status === 'pending' && latest.learn.tour !== 'active' ? 'accept the code' : '') : sub };
+  }
+
+  /** The flow in one line, as configured. */
+  private flowLine(): string {
+    return this.requireSteps
+      ? 'Before I write any code: **1. Explain the idea → 2. Write the steps → 3. Read the code.**'
+      : 'Quick one before I write the code: **1. Explain the idea → 2. Walk through the code → 3. Predict, run & modify.**';
+  }
+
+  /** What the student is looking at during a walkthrough: the current stop, and the code itself if it isn't accepted yet. */
+  private tourNote(): string {
+    const t = this.tour;
+    const p = t && this.proposals.get(t.id);
+    if (!t || !p) return '';
+    const stop = t.stops[t.index];
+    return [
+      `\n\nWALKTHROUGH: the student is at stop ${t.index + 1} of ${t.stops.length} ("${stop.title}"), lines ${stop.start}-${stop.end} of ${p.path}. Their question is probably about these lines.`,
+      t.pending ? `This code is PROPOSED and not accepted yet, so it is not in the files above. Answer about it; do not write SEARCH/REPLACE blocks for it.\nPROPOSED ${p.path}:\n${numbered(p.newContent.replace(/\r\n/g, '\n').split('\n'))}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  /** After Step 1: either ask for the steps (if required) or write the code straight away. */
+  private async afterIdea() {
+    if (this.requireSteps) return this.toSteps();
+    const g = this.gate!;
+    g.idea = g.ideaParts.join(' / ');
+    return this.finishGate();
   }
 
   private skillRows(): VibeView['skills'] {
@@ -1546,7 +1652,7 @@ export class VibeSession {
     const accepted = [...this.proposals.values()].filter(p => p.card.status === 'accepted');
     const read = accepted.filter(p => p.viewedDiff || p.toured || p.learn.predict === 'done').length;
     return [
-      { label: 'Explaining', value: frac(s.gatesUnaided, s.gates), detail: 'Times you explained the idea and wrote working steps without needing the tutor to fill them in.' },
+      { label: 'Explaining', value: frac(s.gatesUnaided, s.gates), detail: 'Times you explained the idea without the tutor having to fill it in.' },
       { label: 'Prompting', value: prompting, detail: 'How clearly your requests describe the goal, inputs/outputs and details (average of your last 5).' },
       { label: 'Reading code', value: frac(read, accepted.length), detail: 'Accepted changes you actually read: viewed the diff, walked through it, or predicted its output.' },
       { label: 'Predicting', value: frac(s.predRight, s.predTotal), detail: 'Times you correctly predicted what your program prints.' },
@@ -1571,10 +1677,104 @@ function conditionLabel(level: Level): string {
   return level === 'guided' ? 'Structured vibe coding' : level === 'off' ? 'Regular vibe coding' : 'Light';
 }
 
+async function isFolder(uri: vscode.Uri): Promise<boolean> {
+  try {
+    return ((await vscode.workspace.fs.stat(uri)).type & vscode.FileType.Directory) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/** File extension for new code with no usable name: from the code itself, else the project's main language. */
+function guessExtension(code: string, ctx: ProjectContext): string {
+  if (/^\s*(def |import \w+$|from \w+ import|print\(|elif |input\()/m.test(code) && !/[;{}]\s*$/m.test(code)) return 'py';
+  if (/\b(console\.log|const |let |function |require\(|=>)/.test(code)) return 'js';
+  const counts = new Map<string, number>();
+  for (const p of ctx.paths) { const e = p.split('.').pop() ?? ''; if (/^(py|js|ts|java|c|cpp|cs|go|rb)$/.test(e)) counts.set(e, (counts.get(e) ?? 0) + 1); }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return top ? top[0] : (ctx.active?.split('.').pop() || 'js');
+}
+
 function changeText(p: Proposal): string {
   return p.blocks.map(b => b.search.trim()
     ? `--- before ---\n${b.search}\n--- after ---\n${b.replace}`
     : `--- whole file ---\n${b.replace}`).join('\n\n').slice(0, 8000);
+}
+
+/**
+ * Does `output` show the same result as `expected` (what the challenge's own solution prints)? Labels may be
+ * worded differently; what must match are the numbers that changed from `before` (e.g. 5050 -> 2550).
+ * Returns undefined when the result has no numbers to compare (then the model decides).
+ */
+export function sameResult(output: string, expected: string, before: string): boolean | undefined {
+  if (output.trim() === expected.trim()) return true;
+  if (output.trim() === before.trim()) return false;
+  const tok = (x: string) => x.toLowerCase().replace(/["'`[\](),:;]|\.(?=\s|$)/g, ' ').split(/\s+/).filter(Boolean);
+  const isNum = (t: string) => /^-?\d+(\.\d+)?$/.test(t);
+  const beforeNums = new Map<string, number>();
+  tok(before).filter(isNum).forEach(n => beforeNums.set(n, (beforeNums.get(n) ?? 0) + 1));
+  const changed = tok(expected).filter(isNum).filter(n => { const k = beforeNums.get(n) ?? 0; if (k > 0) { beforeNums.set(n, k - 1); return false; } return true; });
+  if (!changed.length) return undefined;
+  const out = tok(output);
+  return changed.every(n => out.includes(n));
+}
+
+/**
+ * Which answer choices describe the real output of a "what if" change. A choice matches if it contains the
+ * whole output, or (outputs usually carry fixed labels like "The total is:") if it names exactly the part
+ * that differs from the current output, e.g. "4950" when the output goes from "...is: 5050" to "...is: 4950".
+ * When the output does not change, choices saying it stays the same (or naming the current value) match.
+ */
+export function matchChoices(choices: string[], actual: string, current?: string): number[] {
+  const whole = choices.map((c, i) => (containsTokens(c, actual) ? i : -1)).filter(i => i >= 0);
+  if (whole.length || current === undefined) return whole;
+  const tok = (x: string) => x.toLowerCase().replace(/["'`[\](),:;]|\.(?=\s|$)/g, ' ').split(/\s+/).filter(Boolean);
+  const isNum = (t: string) => /^-?\d+(\.\d+)?$/.test(t);
+  const act = tok(actual);
+  const cur = tok(current);
+  const curCount = new Map<string, number>();
+  cur.forEach(t => curCount.set(t, (curCount.get(t) ?? 0) + 1));
+  const changed = act.filter(t => { const n = curCount.get(t) ?? 0; if (n > 0) { curCount.set(t, n - 1); return false; } return true; });
+  const actNums = new Set(act.filter(isNum));
+  const curNums = new Set(cur.filter(isNum));
+  const lastNum = [...act].reverse().find(isNum);
+  const numsOf = (c: string) => tok(c).filter(isNum);
+  const matches = choices.map((c, i) => {
+    const ct = tok(c);
+    const nums = numsOf(c);
+    // Numbers must come from the real output (or name the current value, as in "4950 instead of 5050").
+    const noWrongNumbers = nums.every(n => actNums.has(n) || curNums.has(n));
+    if (!changed.length) {
+      // Output unchanged: "same as before", or the result value (the last number, not a label's numbers).
+      return /\b(same|unchanged|no change|still)\b/i.test(c) || (lastNum !== undefined && ct.includes(lastNum) && noWrongNumbers) ? i : -1;
+    }
+    return changed.every(t => ct.includes(t)) && noWrongNumbers ? i : -1;
+  }).filter(i => i >= 0);
+  if (!matches.length) return qualitativeMatches(choices, actual, current);
+  if (matches.length < 2) return matches;
+  // Several fit: keep the one(s) that account for the most of the real output's numbers.
+  const score = (i: number) => numsOf(choices[i]).reduce((sc, n) => sc + (actNums.has(n) ? 1 : -1), 0);
+  const best = Math.max(...matches.map(score));
+  return matches.filter(i => score(i) === best);
+}
+
+/** Choices that describe the result in words ("a smaller number", "the same result") against the real change. */
+function qualitativeMatches(choices: string[], actual: string, current: string): number[] {
+  const lastNum = (s: string) => { const m = s.match(/-?\d+(\.\d+)?/g); return m ? Number(m[m.length - 1]) : undefined; };
+  const a = lastNum(actual);
+  const c = lastNum(current);
+  const relation = actual.trim() === current.trim() ? 'same'
+    : a !== undefined && c !== undefined ? (a < c ? 'smaller' : a > c ? 'larger' : 'same') : undefined;
+  if (!relation) return [];
+  const kinds: Record<string, RegExp> = {
+    same: /\b(same|unchanged|no change|not change|still)\b/i,
+    smaller: /\b(smaller|less|lower|decreases?d?|fewer|reduced?)\b/i,
+    larger: /\b(larger|bigger|greater|higher|increases?d?)\b/i,
+  };
+  return choices.map((ch, i) => {
+    const said = Object.keys(kinds).filter(k => kinds[k].test(ch));
+    return said.length === 1 && said[0] === relation ? i : -1;
+  }).filter(i => i >= 0);
 }
 
 /** True if the words of `needle` (e.g. a program's output) appear, in order and adjacent, in `text`. */

@@ -108,3 +108,48 @@ test('fencedToBlocks leaves short inline examples in the explanation', () => {
   assert.equal(blocks.length, 0);
   assert.match(rest, /x\+\+/);
 });
+
+const { locateLines } = require('../out/vibe/edits');
+const game = [
+  'const secret = 7;',          // 1
+  'let attempts = 0;',          // 2
+  '',                           // 3
+  'function check(guess) {',    // 4
+  '  attempts++;',              // 5
+  '  if (guess === secret) {',  // 6
+  "    console.log('Correct');",// 7
+  '  } else {',                 // 8
+  "    console.log('Again');",  // 9
+  '  }',                        // 10
+  '}',                          // 11
+  '',                           // 12
+  'check(3);',                  // 13
+  'check(7);',                  // 14
+];
+
+test('locateLines finds quoted code even when the model gives the wrong line numbers', () => {
+  assert.deepEqual(locateLines(game, '  if (guess === secret) {\n    console.log(\'Correct\');', 2), { start: 6, end: 7 });
+});
+
+test('locateLines ignores indentation, blank lines and accidental "12| " prefixes', () => {
+  assert.deepEqual(locateLines(game, 'let attempts = 0;\n\nfunction check(guess) {', 1), { start: 2, end: 4 });
+  assert.deepEqual(locateLines(game, ' 6| if (guess === secret) {', 1), { start: 6, end: 6 });
+});
+
+test('locateLines picks the occurrence nearest to the model\'s line when code repeats', () => {
+  assert.deepEqual(locateLines(['x++;', 'y();', 'x++;'], 'x++;', 3), { start: 3, end: 3 });
+  assert.deepEqual(locateLines(['x++;', 'y();', 'x++;'], 'x++;', 1), { start: 1, end: 1 });
+});
+
+test('locateLines covers a whole quoted block, start to end', () => {
+  assert.deepEqual(locateLines(game, 'function check(guess) {\n  attempts++;\n  if (guess === secret) {\n    console.log(\'Correct\');\n  } else {\n    console.log(\'Again\');\n  }\n}', 9), { start: 4, end: 11 });
+});
+
+test('locateLines returns nothing for code that is not in the file', () => {
+  assert.equal(locateLines(game, 'while (true) {}', 3), undefined);
+});
+
+test('locateLines follows a non-verbatim quote in order and stops where the quote stops', () => {
+  // the model left out a line and the quote ends with a generic "}": highlight 6-8, not up to the last "}"
+  assert.deepEqual(locateLines(game, '  if (guess === secret) {\n  } else {', 6), { start: 6, end: 8 });
+});

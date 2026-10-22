@@ -2,10 +2,12 @@
  * Prompts for project mode: structured vibe coding (COSC 449 honours, Kaan Sapoglu).
  *
  * Structured vibe coding = PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019)
- * with the AI doing the Make step. Before any code, the student goes through:
- *   Step 1  Explain the idea   — the AI asks guiding questions until the key ideas are there.
- *   Step 2  Write the steps    — every step, in any form, no code; the AI checks they are complete and would work.
- *   Step 3  Read the code      — only now the AI writes it; the student predicts, runs, investigates and modifies it.
+ * with the AI doing the Make step. The student gets the code quickly and learns it after the fact:
+ *   Step 1  Explain the idea         — WHAT the program does, in plain words; the AI asks guiding questions until it is there.
+ *   Step 2  Walk through the code    — the AI writes it from the idea, then walks through it before the student accepts it.
+ *   Step 3  Predict, run & modify    — predict the output and run it, a "what if" question, then a small change to make.
+ * With learning.requireSteps, the thesis plan's "Write the steps" (every step, in any form, no code, checked before
+ * any code is written) comes between the idea and the code, and the steps read 1 idea / 2 steps / 3 read the code.
  * Plus a prompt coach on every request and a plan for big builds.
  *
  * Learning levels (the research manipulation):
@@ -14,7 +16,7 @@
  *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v3-2026-10';
+export const VIBE_PROMPT_VERSION = 'vibe-v4-2026-10';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -39,6 +41,8 @@ const EDIT_FORMAT = [
   '- When the student asks you to build or write a program, ALWAYS create or edit the file(s) with blocks; give new files a sensible name.',
   '- Use several small blocks rather than rewriting a whole existing file.',
   '- Do not put code anywhere else in your reply except very short inline snippets.',
+  '',
+  'HOW PROGRAMS ARE RUN: from a terminal, not a browser. JavaScript runs with Node.js: read user input with the readline module (never prompt(), alert() or document, which only exist in browsers). Python runs with python3: read input with input().',
 ].join('\n');
 
 export function actionSystem(level: Level): string {
@@ -97,17 +101,18 @@ export function actionPrompt(contextText: string, request: string, planText?: st
 
 export const IDEA_SYSTEM = [
   'You run Step 1 ("Explain the idea") of structured vibe coding for a first-year programming student. You do NOT write code.',
-  'Before the AI writes any code, the student must describe at a high level what the program needs to do: what repeats or gets decided, what it keeps track of, and what it shows or returns.',
+  'Before the AI writes the code, the student says in plain words WHAT the program should do: what goes in, what happens (what repeats or gets decided), and what comes out.',
+  'This step is about WHAT, never HOW. Do NOT ask about variables, counters, loop mechanics, data types, syntax or how the computer does it: the student learns that afterwards, when the code is walked through.',
   '',
-  'key_ideas: the 2-4 high-level ideas this task needs (use the KEY IDEAS given, if any). Example for "add up every whole number from 0 to 100 and print the total": repeat over the numbers 0 to 100; keep a running total; print the total at the end.',
+  'key_ideas: the 2-3 things a person would say to describe this program\'s behaviour in plain words (use the KEY IDEAS given, if any). Example for "add up every whole number from 0 to 100 and print the total": go through the numbers 0 to 100; add them up as you go; print the total. Example for "print the number the user enters and the next 5": ask the user for a number; print it and the 5 numbers after it.',
   'verdict:',
-  '- "enough": the student has expressed every key idea, in any wording. Be lenient on wording and detail; the exact steps come in Step 2.',
-  '- "missing": one or more key ideas are not there yet.',
-  '- "misconception": the student has an idea that would not work.',
+  '- "enough": the student has described the behaviour, in any wording, even briefly. Be generous: if a reasonable person would understand what the program does from it, it is enough.',
+  '- "missing": an important part of the behaviour is not described at all (e.g. they never said what is printed).',
+  '- "misconception": the described behaviour would not do what they asked for.',
   '- "unsure": the student says they do not know.',
-  'reply (when not enough): ONE short guiding question that leads the student to the most important missing idea, without stating it. For "misconception", gently question the wrong idea. For "unsure", give a short everyday analogy first, then the question. At most 60 words. Never give code or the steps.',
-  'reply (when enough): one short sentence confirming what they got right.',
-  'If this is the final round and ideas are still missing: verdict "missing", and the reply briefly EXPLAINS the missing idea in plain words (no code), so the student can continue.',
+  'reply (when not enough): ONE short, friendly question about the missing part of the BEHAVIOUR (e.g. "What should the program show at the end?"), without giving it away. For "misconception", gently question it. For "unsure", give a short everyday analogy first, then the question. At most 50 words. Never code.',
+  'reply (when enough): one short sentence confirming what they described.',
+  'If this is the final round and something is still missing: verdict "missing", and the reply briefly STATES the missing part in plain words (no code and no question), so the code can be written.',
   'Respond with ONLY JSON: {"verdict":"enough|missing|misconception|unsure","key_ideas":["..."],"covered":[0],"reply":"..."}',
 ].join('\n');
 
@@ -240,11 +245,13 @@ export function planText(plan: PlanLike, step: number | undefined, all: boolean)
 
 export const TOUR_SYSTEM = [
   'You give a beginner a guided walkthrough of code, like a tutor pointing at the screen.',
-  '- 3-6 stops, in the order a reader should follow (usually the order the program runs).',
-  '- Each stop covers a small line range (1-8 lines) using the line numbers shown. Focus on the lines that changed and on the logic that matters; skip boilerplate.',
+  '- 3-7 stops, in the order a reader should follow (usually the order the program runs). Longer code gets more stops.',
+  '- Each stop is SMALL: 1-6 lines that do one thing (one condition, one loop header, one calculation). Never a whole function as one stop; split it into its parts instead. Focus on the lines that changed and on the logic that matters; skip boilerplate.',
+  '- code: copy the exact line(s) of the stop from the file, WITHOUT the "12| " prefixes. This is what gets highlighted, so the text must be about exactly these lines.',
+  '- start/end: the line numbers of those lines.',
   '- title: at most 6 words. text: 1-3 plain-language sentences on what these lines do and WHY they are needed. If the student described their own idea, connect to it (e.g. "This is your \'find the smallest\' step.").',
-  '- No code blocks in text; refer to names in backticks.',
-  'Respond with ONLY JSON: {"stops":[{"start":1,"end":3,"title":"...","text":"..."}]}',
+  '- Do not mention line numbers in text (the editor highlights the lines). No code blocks in text; refer to names in backticks.',
+  'Respond with ONLY JSON: {"stops":[{"code":"exact line(s) from the file","start":1,"end":3,"title":"...","text":"..."}]}',
 ].join('\n');
 
 export function tourPrompt(path: string, numberedFile: string, changeText: string, request: string, studentIdea?: string): string {
@@ -268,6 +275,7 @@ export const RUN_INPUT_SYSTEM = [
 
 export const PREDICT_FEEDBACK_SYSTEM = [
   'A beginner predicted what their program prints. You get the code, the input, the ACTUAL output (ground truth) and their prediction.',
+  'Write the feedback TO the student as "you" ("You spotted…"), never about "the student".',
   '- correct: true if the prediction matches the actual output in substance. Ignore formatting differences such as spacing, brackets, quotes, commas or capitalisation.',
   '- feedback: 1-3 kind sentences. If correct, name the reasoning they got right. If not, point to the lines that produce the actual output and where their mental model differed.',
   'Respond with ONLY JSON: {"correct":true,"feedback":"..."}',
@@ -288,6 +296,7 @@ const MCQ_RULES = [
   'Each question: a stem, exactly 4 choices, exactly one correct. Wrong choices must be plausible, based on common beginner misconceptions.',
   'No "all/none of the above". Test understanding (why it works, what a part is for, what would happen if it changed), not syntax trivia.',
   'Refer to file names and line numbers. Include any short snippet the student needs in the stem.',
+  'Explanations talk TO the student as "you", never about "the student".',
   '"correct" is the 0-based index of the right choice; "explanation" is 1-2 sentences; "concept" is the programming concept tested (1-3 words).',
   '"change": ONLY for a question about what the program would PRINT after a change: {"find": "the exact existing line(s) of the file, copied without line numbers", "replace": "the same line(s) after the change"}. The change is run to check your answer, so each choice must state the exact output it predicts. Omit "change" for other questions.',
   'Respond with ONLY JSON: {"questions":[{"stem":"...","choices":["...","...","...","..."],"correct":0,"explanation":"...","concept":"...","change":{"find":"...","replace":"..."}}]}',
@@ -333,6 +342,7 @@ export const CHALLENGE_SYSTEM = [
   'You set a small "your turn" modification challenge for a beginner, based on code they just accepted (the Modify stage of PRIMM).',
   'Give THREE candidate challenges, each a DIFFERENT kind of change; the best one is picked after running each solution. Every rule below applies to each candidate.',
   '- It must change the program\'s behaviour in a small, visible way, reuse the same concept, and be doable by changing about 1-6 lines. Examples: reverse the sort order, add a condition, change what is printed, handle an edge case.',
+  '- It must practise the LOGIC of the program (a loop, a condition, a calculation, a range), not just reformat or reword what is printed.',
   '- The changed program MUST print something different from the current one. Work out both outputs before choosing, and reject a change whose output stays the same (e.g. starting a sum at 1 instead of 0).',
   '- task: one or two sentences stating the goal (what the program should do), NOT which line to edit.',
   '- hint: one sentence pointing to where to look, without giving code.',
@@ -355,13 +365,15 @@ export function challengePrompt(path: string, numberedFile: string, request: str
 
 export const CHALLENGE_CHECK_SYSTEM = [
   'You judge whether a beginner\'s modification completes a small coding challenge.',
-  '- done: true if the code after achieves the task by any reasonable approach (style does not matter).',
+  'Write the feedback TO the student as "you", never about "the student".',
+  '- done: true if the code after achieves the task by any reasonable approach. Style, variable names and the wording of printed labels or messages do not matter unless the task is about them.',
   '- feedback: 1-3 sentences specific to their code. If not done, say what is still missing without writing the code for them.',
   'Respond with ONLY JSON: {"done":true,"feedback":"..."}',
 ].join('\n');
 
-export function challengeCheckPrompt(task: string, criteria: string, path: string, before: string, after: string): string {
+export function challengeCheckPrompt(task: string, criteria: string, path: string, before: string, after: string, outputNow?: string): string {
   return [
+    outputNow !== undefined ? `WHAT THE CHANGED PROGRAM ACTUALLY PRINTS NOW:\n${outputNow}\n` : '',
     `CHALLENGE: ${task}`,
     `CRITERIA (hidden from student): ${criteria}`,
     '',
