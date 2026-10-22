@@ -1,0 +1,18 @@
+{
+  "apiProvider": "ollama",
+  "model": "qwen3-coder:30b",
+  "ollamaUrl": "http://127.0.0.1:11434",
+  "ollamaContextLength": 16384,
+  "temperature": 0.2,
+  "pythonPath": "",
+
+  "learning.level": "guided",
+  "learning.requireSteps": false,
+  "learning.maxRoundsPerStep": 3,
+  "learning.allowSkipSteps": true,
+  "learning.clarify": true,
+  "learning.maxClarifications": 2,
+  "learning.questionsPerChange": 1,
+  "learning.projectQuizQuestions": 3,
+  "context.maxChars": 24000
+}

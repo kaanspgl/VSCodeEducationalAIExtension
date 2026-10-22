@@ -3,7 +3,7 @@ import { ChatPanel } from './panels/ChatPanel';
 import { checkOllamaConnection } from './shared/callBackend';
 import { StudyLogger } from './study/logger';
 import { StudySession } from './study/session';
-import { ProposedContent } from './vibe/edits';
+import { ProposedContent } from './vibe/proposed';
 import { VibeSession } from './vibe/session';
 
 /**

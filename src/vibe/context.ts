@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
+import { ContextFile, formatContext, Selection } from './contextFormat';
 
-export type Selection = { path: string; startLine: number; endLine: number; text: string };
+export { numbered } from './contextFormat';
+export type { Selection } from './contextFormat';
 
 export type ProjectContext = {
   /** Text block given to the model: file listing, file contents (numbered), and selection. */
@@ -67,34 +69,12 @@ export async function buildContext(maxChars: number, scope?: string): Promise<Pr
     } catch { return undefined; }
   };
 
-  const listing: string[] = [];
-  const blocks: string[] = [];
-  const included: string[] = [];
-  let used = 0;
+  const files: ContextFile[] = [];
   let readCount = 0;
-
   for (const u of all) {
-    const path = rel(u);
-    const prio = priority(u);
     let text: string | undefined;
-    if (prio <= 2 || readCount < 80) { text = await readText(u); readCount++; }
-    if (text === undefined) { listing.push(`- ${path}`); continue; }
-    const lines = text.replace(/\r\n/g, '\n').split('\n');
-    listing.push(`- ${path} (${lines.length} lines)`);
-
-    // Full text for every file that fits the budget (open files first), so edits can quote it exactly.
-    const full = numbered(lines);
-    if (used + full.length <= maxChars) {
-      blocks.push(`=== ${path} ===\n${full}`);
-      used += full.length;
-      included.push(path);
-    } else {
-      const outline = outlineOf(lines);
-      if (outline && used + outline.length <= maxChars) {
-        blocks.push(`=== ${path} (outline only — full text not shown) ===\n${outline}`);
-        used += outline.length;
-      }
-    }
+    if (priority(u) <= 2 || readCount < 80) { text = await readText(u); readCount++; }
+    files.push({ path: rel(u), text });
   }
 
   const ed = activeEd;
@@ -108,17 +88,9 @@ export async function buildContext(maxChars: number, scope?: string): Promise<Pr
     };
   }
 
-  const parts = [
-    scope ? `CURRENT PROJECT FOLDER: ${scope}/ (only files in this folder are shown; create new files inside it)` : '',
-    `PROJECT FILES (${all.length}):\n${listing.join('\n') || '(none yet)'}`,
-    `FILE CONTENTS (line numbers are for reference only and are NOT part of the file):\n${blocks.join('\n\n') || '(none)'}`,
-  ];
-  if (activeUri) parts.push(`ACTIVE FILE: ${rel(activeUri)}`);
-  if (selection) {
-    parts.push(`STUDENT SELECTION (${selection.path}, lines ${selection.startLine}-${selection.endLine}):\n${selection.text}`);
-  }
+  const { text, included } = formatContext(files, maxChars, { scope, active: activeUri ? rel(activeUri) : undefined, selection });
   return {
-    text: parts.filter(Boolean).join('\n\n'),
+    text,
     files: included,
     fileCount: all.length,
     paths: all.map(rel),
@@ -152,17 +124,4 @@ export async function listFiles(scope?: string): Promise<string[]> {
 
 function inScope(path: string, scope?: string): boolean {
   return !scope || path.startsWith(scope + '/');
-}
-
-export function numbered(lines: string[]): string {
-  const w = String(lines.length).length;
-  return lines.map((l, i) => `${String(i + 1).padStart(w, ' ')}| ${l}`).join('\n');
-}
-
-/** Signature-ish lines so the model knows what lives in files it can't see in full. */
-function outlineOf(lines: string[]): string {
-  const re = /^\s*(def |class |function |export |import |from |const \w+ = (\(|async|function)|public |private |protected |static |interface |type |#include|using |package )/;
-  const out: string[] = [];
-  lines.forEach((l, i) => { if (re.test(l) && out.length < 40) out.push(`${i + 1}| ${l.slice(0, 140)}`); });
-  return out.join('\n');
 }

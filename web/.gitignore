@@ -1,0 +1,8 @@
+node_modules/
+build/
+.react-router/
+# participant workspaces and research logs
+data/
+# local settings (may hold API keys); copy vibelearner.config.example.json
+vibelearner.config.json
+.env

@@ -45,10 +45,11 @@ const EDIT_FORMAT = [
   'HOW PROGRAMS ARE RUN: from a terminal, not a browser. JavaScript runs with Node.js: read user input with the readline module (never prompt(), alert() or document, which only exist in browsers). Python runs with python3: read input with input().',
 ].join('\n');
 
-export function actionSystem(level: Level): string {
+/** `where` names the editor the assistant lives in (the web platform passes its own). */
+export function actionSystem(level: Level, where = 'inside VS Code'): string {
   if (level === 'off') {
     return [
-      'You are an AI coding assistant inside VS Code. You can see the user\'s whole project.',
+      `You are an AI coding assistant ${where}. You can see the user's whole project.`,
       'Do what the user asks: build new programs or features, edit or fix existing code, or answer questions about the code.',
       'Make the smallest change that does the job, keep the user\'s style, and do not rewrite files unnecessarily.',
       '',
@@ -61,7 +62,7 @@ export function actionSystem(level: Level): string {
     ].join('\n');
   }
   return [
-    'You are VibeLearner, an AI pair-programmer inside VS Code for students who are learning to program by "vibe coding".',
+    `You are VibeLearner, an AI pair-programmer ${where} for students who are learning to program by "vibe coding".`,
     'You can see the student\'s whole project. Do what they ask: build new programs or features, edit or fix existing code, or explain code.',
     'The student always gets working code; your extra job is to make sure they can understand it.',
     '',

@@ -1,15 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Module = require('node:module');
-
-// session.ts imports 'vscode'; matchChoices itself doesn't use it.
-const load = Module._load;
-Module._load = function (request, ...rest) {
-  if (request === 'vscode') return {};
-  return load.call(this, request, ...rest);
-};
-const { matchChoices } = require('../out/vibe/session');
-Module._load = load;
+const { matchChoices, sameResult } = require('../out/vibe/checks');
 
 // The answer key of a "what would it print if…" question is checked against the real output of the changed
 // program. These cases come from real model runs on "add up every whole number from 0 to 100".
@@ -63,8 +54,6 @@ test('word choices: "a smaller number" matches when the result goes down', () =>
 });
 
 // "Check my work" is decided by running the student's program when the solution's output is known.
-const { sameResult } = require('../out/vibe/session');
-
 test('sameResult: right result with different label wording counts as done', () => {
   const expected = 'The sum of even numbers from 0 to 100 is: 2550';
   assert.equal(sameResult('The sum of numbers from 0 to 100 is: 2550', expected, current), true);
