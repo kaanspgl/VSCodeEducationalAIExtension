@@ -226,21 +226,26 @@
           "enumDescriptions": [
             "Regular vibe coding (comparison condition): the AI writes code straight from the request; no steps, coaching or learning tools.",
             "Light: the learning tools (predict & run, walk through, questions, modify) are on each change as buttons; nothing is required.",
-            "Structured vibe coding (treatment condition): for anything that needs programming logic, the student explains the idea (Step 1) and writes the steps (Step 2) before the AI writes code, then reads the code the PRIMM way (Step 3: predict, run, investigate, modify)."
+            "Structured vibe coding (treatment): for anything that needs programming logic, the student explains the idea (Step 1), the AI writes the code and walks through it with them before they accept it (Step 2), then they predict, run, answer a question and make a change (Step 3)."
           ],
           "description": "Structured vs regular vibe coding (the study conditions)."
+        },
+        "vibelearner.learning.requireSteps": {
+          "type": "boolean",
+          "default": false,
+          "description": "Structured mode: also ask the student to write every step (in any form, no code) before the AI writes code. Off by default: the code comes right after the idea and the student learns it through the walkthrough."
         },
         "vibelearner.learning.maxRoundsPerStep": {
           "type": "number",
           "default": 3,
           "minimum": 1,
           "maximum": 8,
-          "description": "Structured mode: guiding rounds for Step 1 (idea) and Step 2 (steps) before the tutor explains what is missing and moves on (logged as scaffolded)."
+          "description": "Structured mode: guiding rounds for explaining the idea (and writing the steps, if required) before the tutor explains what is missing and moves on (logged as scaffolded)."
         },
         "vibelearner.learning.allowSkipSteps": {
           "type": "boolean",
           "default": true,
-          "description": "Structured mode: show \"Skip: just write the code\" during Steps 1-2 (skips are logged). Turn off for the study if every request must go through the steps."
+          "description": "Structured mode: show \"Skip: just write the code\" while explaining the idea (skips are logged). Turn off if every request must go through Step 1."
         },
         "vibelearner.learning.clarify": {
           "type": "boolean",

@@ -110,6 +110,47 @@ export function blocksToText(blocks: EditBlock[]): string {
   return blocks.map(b => `<<<<<<< SEARCH ${b.path}\n${b.search}${b.search && !b.search.endsWith('\n') ? '\n' : ''}=======\n${b.replace}${b.replace.endsWith('\n') ? '' : '\n'}>>>>>>> REPLACE`).join('\n\n');
 }
 
+/**
+ * Finds quoted code in a file and returns its 1-based line range. Models often get line numbers wrong, so a
+ * walkthrough highlights where the code it talks about really is. Whitespace and blank lines are ignored;
+ * when the quote occurs more than once, the occurrence nearest to `hint` (the model's line number) wins.
+ */
+export function locateLines(fileLines: string[], quote: string, hint?: number): { start: number; end: number } | undefined {
+  const norm = (l: string) => l.replace(/^\s*\d+\|\s?/, '').trim().replace(/\s+/g, ' ');
+  const q = quote.replace(/\r\n/g, '\n').split('\n').map(norm).filter(Boolean);
+  if (!q.length) return undefined;
+  const idx: number[] = []; // positions of non-blank file lines
+  const f: string[] = [];
+  fileLines.forEach((l, i) => { const n = l.trim().replace(/\s+/g, ' '); if (n) { idx.push(i); f.push(n); } });
+  const near = (cands: number[]) => {
+    const h = (hint ?? 1) - 1;
+    return cands.reduce((a, b) => (Math.abs(idx[b] - h) < Math.abs(idx[a] - h) ? b : a));
+  };
+
+  // 1. the whole quote, line for line
+  const whole: number[] = [];
+  for (let i = 0; i + q.length <= f.length; i++) if (q.every((l, k) => f[i + k] === l)) whole.push(i);
+  if (whole.length) {
+    const i = near(whole);
+    return { start: idx[i] + 1, end: idx[i + q.length - 1] + 1 };
+  }
+
+  // 2. not verbatim (a line left out or reworded): follow the quoted lines in order from each place the first
+  //    one appears, allowing small gaps, and keep the start that matches the most of the quote.
+  const same = (a: string, b: string) => a === b || (b.length >= 10 && a.includes(b));
+  let best: { i: number; j: number; matched: number } | undefined;
+  for (let i = 0; i < f.length; i++) {
+    if (!same(f[i], q[0])) continue;
+    let j = i, qi = 1, gap = 0;
+    for (let k = i + 1; k < f.length && qi < q.length; k++) {
+      if (same(f[k], q[qi])) { j = k; qi++; gap = 0; } else if (++gap > 2) break;
+    }
+    const closer = best && Math.abs(idx[i] - ((hint ?? 1) - 1)) < Math.abs(idx[best.i] - ((hint ?? 1) - 1));
+    if (!best || qi > best.matched || (qi === best.matched && closer)) best = { i, j, matched: qi };
+  }
+  return best ? { start: idx[best.i] + 1, end: idx[best.j] + 1 } : undefined;
+}
+
 /** Workspace-relative POSIX path, or undefined if it could escape the workspace. */
 export function normalizePath(p: string): string | undefined {
   const n = p.trim().replace(/^`+|`+$/g, '').replace(/\\/g, '/').replace(/^\.\//, '');

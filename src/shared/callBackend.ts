@@ -148,7 +148,9 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
   const body = {
     model,
     messages,
-    stream: false,
+    // Streamed: a long answer (slow machine, big file) keeps the connection alive instead of hitting
+    // fetch's five-minute limit on waiting for a response.
+    stream: true,
     // Ollama defaults to a 4096-token window and silently drops the start of longer prompts (our
     // instructions). Keep this fixed across calls: changing it makes Ollama reload the model.
     options: { temperature, num_ctx: cfg.get<number>('ollamaContextLength') ?? 16384 },
@@ -166,8 +168,7 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
       throw new Error(`Ollama Error: ${res.status} ${res.statusText}${detail ? ` - ${detail}` : ''}`);
     }
 
-    const data: any = await res.json();
-    const text = data?.message?.content || data?.response || '';
+    const text = await readOllamaReply(res);
 
     return {
       text,
@@ -177,6 +178,36 @@ async function route(args: CallArgs): Promise<Omit<CallResult, 'ms'>> {
   } catch (err: any) {
     throw new Error(`Ollama connection failed. Is 'ollama serve' running? Error: ${err.message}`);
   }
+}
+
+/** Collects a streamed (newline-delimited JSON) Ollama chat reply; falls back to a single JSON body. */
+async function readOllamaReply(res: any): Promise<string> {
+  if (!res.body?.getReader) {
+    const data: any = await res.json();
+    return data?.message?.content || data?.response || '';
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let text = '';
+  const take = (line: string) => {
+    if (!line.trim()) return;
+    const chunk = JSON.parse(line);
+    if (chunk.error) throw new Error(String(chunk.error));
+    text += chunk.message?.content ?? chunk.response ?? '';
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffered.indexOf('\n')) >= 0) {
+      take(buffered.slice(0, nl));
+      buffered = buffered.slice(nl + 1);
+    }
+  }
+  take(buffered + decoder.decode());
+  return text;
 }
 
 function approxUsage(output: string, input: string) {
