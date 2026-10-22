@@ -36,6 +36,7 @@ export function Setup({ view }: { view: VibeView }) {
         <label className="field">Participant code
           <input type="text" maxLength={32} autoComplete="off" placeholder="e.g. P014" value={participant} onChange={(e) => setParticipant(e.target.value)} />
         </label>
+        <p className="hint">Please don't type personal information (your name, student number or email) into VibeLearner. Use only the made-up data in the tasks.</p>
         <label className="check">
           <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
           <span>I have read the information letter, I consent to take part, and I understand my interactions in this session (messages, code changes, answers, timings) are recorded for research.</span>
