@@ -16,7 +16,7 @@
  *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v4-2026-10';
+export const VIBE_PROMPT_VERSION = 'vibe-v5-2026-10';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -29,16 +29,13 @@ const EDIT_FORMAT = [
   'the new lines',
   '>>>>>>> REPLACE',
   'To create a new file (SEARCH part left empty):',
-  '<<<<<<< SEARCH guess_game.py',
+  '<<<<<<< SEARCH path/to/new_file.py',
   '=======',
-  'import random',
-  '',
-  'def main():',
-  '    ...',
+  'all the lines of the new file',
   '>>>>>>> REPLACE',
   '- The path must be one of the listed project paths (or a new path for a new file).',
   '- SEARCH must copy the existing text exactly, WITHOUT the "12| " line-number prefixes. Include just enough lines to be unique.',
-  '- When the student asks you to build or write a program, ALWAYS create or edit the file(s) with blocks; give new files a sensible name.',
+  '- When the student asks you to build or write a program, ALWAYS create or edit the file(s) with blocks. Give a new file a short name that says what the program does, with its language\'s extension (the paths above are only placeholders).',
   '- Use several small blocks rather than rewriting a whole existing file.',
   '- Do not put code anywhere else in your reply except very short inline snippets.',
   '',
