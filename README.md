@@ -33,7 +33,7 @@ Step 3 in detail:
 
 **Checked against reality, not the AI's word.** Local models are often confidently wrong, so VibeLearner runs the code to keep its teaching honest:
 * the answer key of a "what if" question is checked by applying that change and running the program; a wrong key is corrected, and a question whose answers don't fit the real output is dropped;
-* every Modify challenge is checked by running its solution, and challenges that wouldn't change the output (e.g. "start the sum at 1 instead of 0") are rejected;
+* every Modify challenge is checked by running its solution, and challenges that wouldn't change the output (e.g. "start the sum at 1 instead of 0") or would only reword it (e.g. "print just the number, without the text") are rejected;
 * **Check my work** runs the student's program and compares its result with the challenge's solution, so wording differences don't matter and the feedback states what the program actually prints.
 
 Step 1 is bounded: after `learning.maxRoundsPerStep` rounds (default 3), the tutor explains what is missing and moves on, and the log marks it as *scaffolded*, so no one gets stuck. Trivial changes (renaming, comments, messages) skip Step 1. Setting `learning.requireSteps` adds the thesis plan's *Write the steps* step (every step in any form, checked before the code is written) between the idea and the code.

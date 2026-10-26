@@ -5,7 +5,7 @@ import { StudyLogger } from '../study/logger';
 import { extractJson, stripThinking } from '../study/prompts';
 import { interpreterFor, runFile, runProgram } from '../study/runner';
 import { buildContext, listFiles, numbered, ProjectContext, quickInfo } from './context';
-import { matchChoices, sameResult } from './checks';
+import { matchChoices, onlyWordingChanged, sameResult } from './checks';
 import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, locateLines, parseBlocks } from './edits';
 import { ProposedContent } from './proposed';
 import * as P from './prompts';
@@ -1116,12 +1116,13 @@ export class VibeSession {
     let fallback: Candidate | undefined;
     const rejected: string[] = [];
     for (let round = 0; round < 2 && !res; round++) {
-      const reply = await ask(round ? `${rejected.map(t => `"${t}"`).join(', ')} print the same output as now (${before.output}).` : undefined);
+      const reply = await ask(round ? `${rejected.map(t => `"${t}"`).join(', ')} don't change what the program computes (it still prints ${before.output}).` : undefined);
       const candidates = (reply?.challenges ?? []).filter(c => typeof c?.task === 'string' && c.task.length > 5).slice(0, 4);
       for (const c of candidates) {
         if (before.output === undefined) { res = c; break; } // nothing to compare against
         const after = c.solution ? await this.runWithEdit(p, c.solution) : { output: undefined, reason: 'no solution given' };
-        const same = after.output !== undefined && after.output === before.output;
+        // Same output, or only its wording changed (e.g. "drop the label"): no logic practised, so not used.
+        const same = after.output !== undefined && (after.output === before.output || onlyWordingChanged(before.output, after.output));
         this.logger.log('vibe_learn', undefined, { kind: 'challenge_check_solution', id: p.id, task: c.task, before: before.output, after: after.output, reason: after.reason, same });
         if (after.output !== undefined && !same) { res = c; expected = after.output; break; }
         if (same) rejected.push(c.task);

@@ -73,6 +73,7 @@ export function actionSystem(level: Level, where = 'inside VS Code'): string {
     '- If the student wrote their own STEPS, the code must follow THEIR steps: same order, same approach, their names for things where sensible, so each step maps to a few lines. Only fix what would not work, and say what you changed and why.',
     '- If the student shared their own idea for how it should work, build it THEIR way when it is correct (even if not the most efficient) and say how the code follows their idea. If their idea is wrong, use a correct approach and kindly explain the difference.',
     '- For bugs and errors: first explain in plain terms what the error means and why it happens, then fix it.',
+    '- Never say what the program will print or what its final result is (e.g. "= 5050"): the student predicts that before running it.',
     '- Make the smallest change that does the job, keep the student\'s style, and do not rewrite files unnecessarily.',
     '- If details are missing, make sensible assumptions and state them in the Summary.',
     '',

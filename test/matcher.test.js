@@ -80,3 +80,17 @@ test('choices that differ only in their reasoning both fit the real output', () 
   // Running can't tell the reasons apart, so both fit; the AI's key (0) is kept because it is one of them.
   assert.deepEqual(matchChoices(reasons, 'The sum of numbers from 0 to 100 is: 4950', current), [0, 2]);
 });
+
+const { onlyWordingChanged } = require('../out/vibe/checks');
+
+test('a challenge that only rewords the output (same numbers) is cosmetic', () => {
+  assert.equal(onlyWordingChanged('The sum of numbers from 0 to 100 is: 5050', '5050'), true); // the demo's "drop the text" challenge
+  assert.equal(onlyWordingChanged('The total is: 5050', '5050'), true);
+  assert.equal(onlyWordingChanged('The total is: 5050', 'Total = 5050'), true);
+  assert.equal(onlyWordingChanged('The total is: 5050', 'The total is: 2550'), false);
+  assert.equal(onlyWordingChanged('Hello', 'Hi'), false); // no numbers: can't tell, so not rejected
+  assert.equal(onlyWordingChanged('The total is: 5050', '0\n1\n2\nThe total is: 5050'), false); // print each number: new numbers
+  assert.equal(onlyWordingChanged('The total is: 5050', 'The total is: 5050\nCount: 101'), false); // also print the count
+  assert.equal(onlyWordingChanged('Sorted: [1, 2, 3]\nLargest: 3', 'Sorted: [3, 2, 1]\nLargest: 3'), false); // reverse the sort
+  assert.equal(onlyWordingChanged('1\n2\n3\nTotal: 6', '3\n2\n1\nTotal: 6'), false); // count down instead of up
+});

@@ -90,3 +90,19 @@ function containsTokens(text: string, needle: string): boolean {
   }
   return false;
 }
+
+/**
+ * True when a change only rewords or trims the output: the final result (last number) is the same and the
+ * numbers left are earlier ones, in the same order (e.g. "The sum of 0 to 100 is: 5050" -> "5050"). A Modify
+ * challenge like that practises no logic, so it is rejected. Real changes add, change or reorder numbers
+ * ("print each number", "add only evens", "reverse the sort order"). False when the output has no numbers.
+ */
+export function onlyWordingChanged(before: string, after: string): boolean {
+  const nums = (s: string) => s.match(/-?\d+(\.\d+)?/g) ?? [];
+  const a = nums(before);
+  const b = nums(after);
+  if (!a.length || !b.length || before.trim() === after.trim()) return false;
+  if (a[a.length - 1] !== b[b.length - 1]) return false;
+  let i = 0;
+  return b.every(n => { while (i < a.length && a[i] !== n) i++; return i++ < a.length; });
+}
