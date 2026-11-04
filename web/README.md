@@ -15,13 +15,19 @@ npm run build && npm start   # production server on http://localhost:3000 (PORT=
 
 Add `-- --port 5180` to either dev command if 5173 is taken.
 
+To put it on a UBC Okanagan server behind Apache with PM2, see [DEPLOY.md](DEPLOY.md).
+
 ## Settings
 
 Copy `vibelearner.config.example.json` to `vibelearner.config.json`. Without it, the defaults are used (Ollama with `qwen3-coder:30b`). The keys are the same as the extension's settings, with or without the `vibelearner.` prefix, so you can paste in a settings.json. The file is re-read whenever a session starts.
 
 Providers: `ollama` (default), `openai` (any OpenAI-compatible server via `openaiBaseUrl`), `gemini` (set `gemini.model` too), `eduai`, and `mock`.
 
-Secrets and a few settings can come from environment variables instead: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EDUAI_API_KEY`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_DATA_DIR`, `VL_CONFIG`.
+Secrets and a few settings can come from environment variables instead: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EDUAI_API_KEY`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_DATA_DIR`, `VL_CONFIG`, `JUDGE0_URL`, `JUDGE0_AUTH_TOKEN`, `VL_RUNNER`, `SITE_PASSWORD`.
+
+With `SITE_PASSWORD` set, the site asks for that password first (once per browser for 30 days; changing the password signs everyone out). Without it the site is open, which is fine on your own machine.
+
+Where programs run: with `judge0.url` (or `JUDGE0_URL`) set, every run goes to that [Judge0](https://judge0.com) server, in a sandbox with no network that holds only the student's project files. `judge0.authToken` is sent in the `judge0.authHeader` header (default `X-Auth-Token`). The newest Python 3 and Node.js on the server are picked automatically; `judge0.pythonLanguageId` / `judge0.javascriptLanguageId` override that. Without a URL, or with `runner` set to `local`, programs run on this machine. To run Judge0 yourself, `judge0/setup.sh` starts it in Docker on 127.0.0.1:2358 and prints its token. `npm run check:runner` tests the configured Judge0, and `npm test` runs the runner's and the password's tests.
 
 ## Research use
 
@@ -29,5 +35,5 @@ Secrets and a few settings can come from environment variables instead: `OPENAI_
 * Data goes in `data/` (or `VL_DATA_DIR`):
   * `study_logs/<code>.jsonl`: one log per participant, written only after consent. Each session's first event records `platform: "web"`, the prompt version, the model and the settings.
   * `workspaces/p-<code>/`: the participant's files, kept across visits. Visitors without a code get `workspaces/anon-<id>/`.
-* Student code runs on the server, with an 8-second limit and without the server's environment variables (so it can't read API keys). If the machine is reachable from outside the lab, run the app in a container.
+* Student code runs with an 8-second limit: on Judge0 when it's configured (use this for any deployment), otherwise on the server itself without its environment variables, which still lets it read the server's files.
 * Sessions live in server memory, so a restart ends them. Files and logs stay.

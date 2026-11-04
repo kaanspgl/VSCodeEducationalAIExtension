@@ -10,6 +10,8 @@
     "dev": "react-router dev",
     "dev:mock": "node scripts/dev-mock.mjs",
     "start": "react-router-serve ./build/server/index.js",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check:runner": "node --experimental-strip-types scripts/check-runner.mjs",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {

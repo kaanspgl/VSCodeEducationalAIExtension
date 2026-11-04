@@ -29,8 +29,9 @@ function entry(sid: string): Entry {
 export async function sessionFor(request: Request): Promise<{ sid: string; session: VibeSession; setCookie?: string }> {
   const existing = await sidCookie.parse(request.headers.get("Cookie"));
   if (typeof existing === "string" && /^[\w-]{8,64}$/.test(existing)) return { sid: existing, session: entry(existing).session };
+  // Not kept until the browser comes back with the cookie, so crawlers and health checks don't pile up sessions.
   const sid = randomUUID();
-  return { sid, session: entry(sid).session, setCookie: await sidCookie.serialize(sid) };
+  return { sid, session: new VibeSession(sid, () => {}), setCookie: await sidCookie.serialize(sid) };
 }
 
 export function subscribe(sid: string, listener: (s: Snapshot) => void): () => void {

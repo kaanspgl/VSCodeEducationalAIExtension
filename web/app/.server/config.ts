@@ -21,6 +21,11 @@ const DEFAULTS: Record<string, unknown> = {
   eduaiApiKey: "",
   courseCode: "DEMO101",
   pythonPath: "",
+  // Where student programs run: "judge0" when judge0.url is set (unless runner is "local"), otherwise this server.
+  runner: "",
+  "judge0.url": "",
+  "judge0.authHeader": "X-Auth-Token",
+  "judge0.authToken": "",
   "learning.level": "guided",
   "learning.requireSteps": false,
   "learning.maxRoundsPerStep": 3,
@@ -42,6 +47,9 @@ const FROM_ENV: Record<string, string> = {
   OPENAI_BASE_URL: "openaiBaseUrl",
   GEMINI_API_KEY: "gemini.apiKey",
   EDUAI_API_KEY: "eduaiApiKey",
+  VL_RUNNER: "runner",
+  JUDGE0_URL: "judge0.url",
+  JUDGE0_AUTH_TOKEN: "judge0.authToken",
 };
 
 export const DATA_DIR = path.resolve(process.env.VL_DATA_DIR || path.join(process.cwd(), "data"));

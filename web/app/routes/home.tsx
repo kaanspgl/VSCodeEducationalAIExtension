@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { data } from "react-router";
+import { requireAccess } from "~/.server/access";
 import { sessionFor } from "~/.server/sessions";
 import { ChatPanel } from "~/components/ChatPanel";
 import { EditorPane } from "~/components/EditorPane";
@@ -15,6 +16,7 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
+  requireAccess(request, "page");
   const { session, setCookie } = await sessionFor(request);
   return data(session.snapshot(), setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined);
 }

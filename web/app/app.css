@@ -112,6 +112,8 @@ form.inline input { width: 150px; padding: 3px 8px; border-radius: 6px; font-siz
 /* setup */
 .center-card { max-width: 540px; margin: 6vh auto; padding: 20px 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); display: flex; flex-direction: column; gap: 12px; }
 .center-card h1, .center-card h2 { margin: 0; }
+.loginform { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.loginform .field { align-self: stretch; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .check { display: flex; gap: 8px; align-items: flex-start; }
 .check input { margin-top: 3px; }

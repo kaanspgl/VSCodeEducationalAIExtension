@@ -8,7 +8,7 @@ import type { EditorView, Level, MsgButton, Snapshot, Stage, StageStatus, VibeCh
 import { DATA_DIR, loadSettings, type Settings } from "./config";
 import { callBackend, type ChatMsg } from "./llm";
 import { safeName, StudyLogger } from "./logger";
-import { runFile, runProgram } from "./runner";
+import { runFile, runnerOptions, runProgram, type RunnerOptions } from "./runner";
 import { Workspace } from "./workspace";
 
 /*
@@ -124,7 +124,7 @@ export class VibeSession {
   private projectQuizCount = 3;
   private maxChars = 24000;
   private model = "";
-  private pythonPath: string | undefined;
+  private runner: RunnerOptions = {};
   private projectDir: string | undefined;
   private target = "auto";
   private lastRequest: { text: string; opts: ActOpts; student?: { idea?: string; steps?: string } } | undefined;
@@ -176,7 +176,7 @@ export class VibeSession {
     this.projectQuizCount = clamp(cfg.get<number>("learning.projectQuizQuestions") ?? 3, 1, 6);
     this.maxChars = clamp(cfg.get<number>("context.maxChars") ?? 24000, 4000, 200000);
     this.model = cfg.get<string>("model") || "qwen3-coder:30b";
-    this.pythonPath = cfg.get<string>("pythonPath") || undefined;
+    this.runner = runnerOptions(cfg);
     this.maxRoundsPerStep = clamp(cfg.get<number>("learning.maxRoundsPerStep") ?? 3, 1, 8);
     this.allowSkipSteps = cfg.get<boolean>("learning.allowSkipSteps") ?? true;
     this.requireSteps = cfg.get<boolean>("learning.requireSteps") ?? false;
@@ -879,7 +879,7 @@ export class VibeSession {
       stdin = (r?.stdin ?? "").replace(/\\n/g, "\n");
       if (stdin && !stdin.endsWith("\n")) stdin += "\n";
     }
-    const run = await runFile(lang, file, stdin, this.pythonPath);
+    const run = await runFile(lang, file, stdin, this.runner);
     this.setBusy(false);
 
     if (run.error) {
@@ -1016,7 +1016,7 @@ export class VibeSession {
       if (!r.applied) return { reason: "edit did not match the file" };
       program = r.content;
     }
-    const run = await runProgram(lang, program, "", this.pythonPath);
+    const run = await runProgram(lang, program, "", this.runner);
     if (run.error) return { reason: run.error };
     if (run.timedOut) return { reason: "timed out" };
     const output = run.stdout.trim();
@@ -1315,7 +1315,7 @@ export class VibeSession {
       return;
     }
     this.setBusy(true, "Running…");
-    const run = await runFile(lang, file, input, this.pythonPath);
+    const run = await runFile(lang, file, input, this.runner);
     this.setBusy(false);
     this.logger.log("program_run", undefined, { via: "panel", file: rel, stdin: input, stdout: run.stdout, stderr: run.stderr, timedOut: run.timedOut, error: run.error });
     if (run.error) { this.say("system", `I can't run it here: ${run.error}`); return; }

@@ -1,8 +1,10 @@
+import { requireAccess } from "~/.server/access";
 import { sessionFor, subscribe } from "~/.server/sessions";
 import type { Route } from "./+types/api.events";
 
 /** Server-Sent Events: the session's full state, sent on connect and after every change. */
 export async function loader({ request }: Route.LoaderArgs) {
+  requireAccess(request, "api");
   const { sid, session, setCookie } = await sessionFor(request);
   if (setCookie) return new Response("No session", { status: 401 });
 

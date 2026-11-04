@@ -1,3 +1,4 @@
+import { requireAccess } from "~/.server/access";
 import { dispatch, sessionFor } from "~/.server/sessions";
 import type { Command } from "~/lib/types";
 import type { Route } from "./+types/api.command";
@@ -6,6 +7,7 @@ const TYPES = new Set<Command["type"]>(["begin", "send", "action", "quizAnswer",
 
 /** A command from the browser. Answers at once; what it changes arrives over /api/events. */
 export async function action({ request }: Route.ActionArgs) {
+  requireAccess(request, "api");
   if (request.method !== "POST" || !request.headers.get("Content-Type")?.includes("application/json")) {
     return Response.json({ error: "POST JSON only" }, { status: 400 });
   }

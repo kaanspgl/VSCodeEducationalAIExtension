@@ -1,0 +1,37 @@
+# Judge0 settings for VibeLearner. setup.sh writes this to judge0.conf, filling in the secrets (@...@): new random
+# ones the first time, the existing ones after that. Change settings here, not in judge0.conf, then rerun setup.sh.
+# judge0.conf is gitignored: it holds the passwords and the API token. Only settings that differ from
+# Judge0's defaults are here; Judge0's own judge0.conf (in its v1.13.1 release) documents the rest.
+
+# Services from docker-compose.yml
+REDIS_HOST=redis
+REDIS_PASSWORD=@REDIS_PASSWORD@
+POSTGRES_HOST=db
+POSTGRES_DB=judge0
+POSTGRES_USER=judge0
+POSTGRES_PASSWORD=@POSTGRES_PASSWORD@
+
+# The app sends this in the X-Auth-Token header (JUDGE0_AUTH_TOKEN in ecosystem.config.cjs).
+AUTHN_TOKEN=@AUTHN_TOKEN@
+
+# Programs never get network access, even if a request asks for it.
+ENABLE_NETWORK=false
+ALLOW_ENABLE_NETWORK=false
+
+# Don't send usage data to Judge0's developers.
+JUDGE0_TELEMETRY_ENABLE=false
+
+# Programs run at the same time (the rest wait in the queue). Judge0's default is two per CPU core, and each
+# worker takes about 80 MB even when idle, which would leave little of the workers' mem_limit for programs.
+# Runs take well under a second, so 4 is plenty for a lab session.
+COUNT=4
+
+# Run the sandbox without cgroups, so Judge0 works on cgroup v2 hosts (RHEL 9, Ubuntu 22.04+, Docker Desktop)
+# without changing the host's boot settings. Time and memory limits then apply to each process, and the memory
+# limit is address space rather than memory in use. Node.js 12 needs about 768 MB of address space just to
+# start (it hangs or crashes below that), so each process gets 1 GB; a simple program uses about 30 MB.
+# docker-compose.yml caps all sandboxes together (mem_limit on the workers).
+ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=true
+ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=true
+MEMORY_LIMIT=1024000
+MAX_MEMORY_LIMIT=1024000
