@@ -1,6 +1,9 @@
 # Judge0 CE 1.13.1, the sandbox that runs participants' programs. Start it with ./setup.sh (see DEPLOY.md).
 # Based on the compose file in Judge0's v1.13.1 release, with the image pinned and the API reachable only from
 # this machine (127.0.0.1:2358), where the VibeLearner app calls it.
+# Unlike Judge0's own file, judge0.conf isn't mounted into the containers: Judge0 runs as a non-root user inside
+# them and couldn't read it (the file is readable only by its owner, since it holds the secrets). Docker reads it
+# instead and passes the settings in as environment variables (env_file), which Judge0 uses the same way.
 name: vibelearner-judge0
 
 x-logging: &default-logging
@@ -12,8 +15,7 @@ x-logging: &default-logging
 services:
   server:
     image: judge0/judge0:1.13.1
-    volumes:
-      - ./judge0.conf:/judge0.conf:ro
+    env_file: judge0.conf
     ports:
       - "127.0.0.1:2358:2358"
     privileged: true # Judge0's sandbox (isolate) needs it
@@ -23,8 +25,7 @@ services:
   workers:
     image: judge0/judge0:1.13.1
     command: ["./scripts/workers"]
-    volumes:
-      - ./judge0.conf:/judge0.conf:ro
+    env_file: judge0.conf
     privileged: true
     # All running programs together, whatever they do (the per-program limits are in judge0.conf).
     mem_limit: 2g
