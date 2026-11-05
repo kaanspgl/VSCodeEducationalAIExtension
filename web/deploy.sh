@@ -3,7 +3,9 @@
 # What:
 #	Pulls the latest commit of the checked-out branch, installs, builds and (re)starts VibeLearner with PM2
 #	(using ecosystem.config.cjs). Adapted from the lab's Remix deploy template; this app has no database,
-#	so the Prisma and Docker steps are gone.
+#	so the Prisma and Docker steps are gone. It also leaves Apache alone: a deploy doesn't change Apache's
+#	config, and S378's Apache serves other lab sites that a restart would interrupt (or take down, if someone
+#	else's config is broken). After editing the Apache conf, reload it yourself (DEPLOY.md, step 7).
 # Before the first run (details in DEPLOY.md):
 #	1. The repo is cloned on the server (e.g. /srv/www/vibelearner) and this file is web/deploy.sh inside it.
 #	2. ecosystem.config.cjs exists next to this file (copy ecosystem.config.example.cjs; it's gitignored).
@@ -20,7 +22,6 @@ APP_GROUP="vibelearner"			# group that shares ownership of the files (use the sa
 GIT_BRANCH="$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD)"	# the branch the server was cloned with (git clone -b <name>)
 LAST_COMMIT_FILE="$APP_DIR/.last_commit"
 LOCKFILE="/tmp/vibelearner-deploy.lock"	# per app, so it can't collide with another site's deploy on the same server
-if [ -d /etc/httpd ]; then APACHE_SERVICE="httpd"; else APACHE_SERVICE="apache2"; fi	# RHEL/CentOS vs Debian/Ubuntu
 
 # Function to clean up the lock file on exit
 cleanup() {
@@ -145,7 +146,3 @@ echo "Checking Judge0 (runs a Python and a JavaScript program)..."
 npm run -s check:runner -- --quick || echo "WARNING: Judge0 isn't working, so participants can't run programs. See DEPLOY.md, step 4."
 
 echo "Deployment complete: $(date)"
-
-# Restart Apache
-echo "Restarting Apache Server (need sudo access - press Ctrl+C to skip)"
-sudo systemctl restart "$APACHE_SERVICE"

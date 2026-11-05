@@ -12,7 +12,7 @@ cat /etc/os-release              # ID=rhel/centos/fedora: Apache is "httpd". ID=
 node -v                          # needs v22.22 or newer (see Troubleshooting to upgrade)
 sudo docker compose version      # Judge0 needs Docker with Compose v2
 ss -tlnp | grep -E ':(3100|2358) '   # no output means both ports are free
-grep -ril "dev.sandbox" /etc/httpd/conf.d/ /etc/apache2/sites-available/ 2>/dev/null   # the site's Apache conf
+sudo apachectl -S | grep -i sandbox   # the site's Apache conf file (on S378: /etc/httpd/conf.d/dev.sandbox.ok.ubc.ca.conf)
 ```
 
 If `docker compose` isn't there, Docker Engine with the Compose plugin has to be installed first (ask whoever runs S378; RHEL's own Podman isn't a replacement here). If 3100 is taken, pick another port and use it in steps 3 and 7.
@@ -95,11 +95,11 @@ cd /srv/www/vibelearner/web
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3100/login   # 200 means the app is up
 ```
 
-The script refuses to start until `SITE_PASSWORD`, `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` are filled in, and checks Node. Then it pulls the branch, runs `npm ci` and `npm run build`, (re)starts the app under PM2, saves the process list, runs a quick Judge0 check (a warning, not a stop, if Judge0 is down) and restarts Apache.
+The script refuses to start until `SITE_PASSWORD`, `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` are filled in, and checks Node. Then it pulls the branch, runs `npm ci` and `npm run build`, (re)starts the app under PM2, saves the process list, and runs a quick Judge0 check (a warning, not a stop, if Judge0 is down). It doesn't touch Apache: a deploy doesn't change Apache's config, and S378's Apache also serves about ten other lab sites that a restart would interrupt.
 
 ## 7. Point Apache at the app
 
-Edit the conf file found in step 1 (`sudo nano /etc/httpd/conf.d/<file>.conf`). If it starts with `# Ansible managed`, ask whoever manages the server before editing. Put this inside the `<VirtualHost *:443>` block, or at the top level if the file has no `<VirtualHost>` block:
+Edit the conf file found in step 1 (on S378: `sudo nano /etc/httpd/conf.d/dev.sandbox.ok.ubc.ca.conf`). If it starts with `# Ansible managed`, ask whoever manages the server before editing. Put this inside the `<VirtualHost *:443>` block, or at the top level if the file has no `<VirtualHost>` block:
 
 ```apache
 ProxyPreserveHost On
@@ -113,8 +113,10 @@ RequestHeader set X-Forwarded-Proto "https"
 `X-Forwarded-Proto` tells the app the browser is on HTTPS, so the password cookie is never sent over plain HTTP. Use `127.0.0.1`, not `localhost`: the app only listens on IPv4 loopback, and `localhost` can resolve to `::1` first. On Debian/Ubuntu, run `sudo a2enmod proxy proxy_http headers` first.
 
 ```bash
-sudo apachectl configtest && sudo systemctl restart httpd    # apache2 on Debian/Ubuntu
+sudo apachectl configtest && sudo systemctl reload httpd    # apache2 on Debian/Ubuntu
 ```
+
+Reload, don't restart: the same Apache serves the other lab sites on S378. A reload picks up the change without dropping their connections, and the `&&` runs it only if the test says "Syntax OK", so a typo can't take every site down.
 
 Then open https://dev.sandbox.ok.ubc.ca: it asks for the site password, then shows the start screen. Ask for a small program and press ▶ Run (until the EduAI key is in, the tutor can't write code, but ▶ Run works on any .py or .js file you open).
 
