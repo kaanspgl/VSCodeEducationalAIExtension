@@ -40,6 +40,14 @@ test("behind Apache over HTTPS the cookie is Secure", async () => {
   assert.ok(r.ok && r.setCookie.endsWith("; Secure"));
 });
 
+test("the cookie is Secure when the form was posted from an HTTPS page, even without X-Forwarded-Proto", async () => {
+  process.env.SITE_PASSWORD = "pw";
+  const https = await login(req({ Origin: "https://dev.sandbox.ok.ubc.ca", "X-Forwarded-For": "10.0.0.5" }), "pw");
+  assert.ok(https.ok && https.setCookie.endsWith("; Secure"));
+  const http = await login(req({ Origin: "http://127.0.0.1:3100", "X-Forwarded-For": "10.0.0.5" }), "pw");
+  assert.ok(http.ok && !http.setCookie.includes("Secure"), "local development over plain HTTP still works");
+});
+
 test("wrong passwords are slowed down, then limited per client", { timeout: 30_000 }, async () => {
   process.env.SITE_PASSWORD = "pw";
   const from = (ip: string) => req({ "X-Forwarded-For": `1.2.3.4, ${ip}` }); // the last entry is what Apache saw

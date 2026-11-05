@@ -64,8 +64,10 @@ export async function login(request: Request, given: string): Promise<LoginResul
 
   if (password && same(tokenFor(given), tokenFor(password))) {
     failures.delete(client);
-    // Apache tells the app the browser used HTTPS (see DEPLOY.md), so the cookie is never sent over plain HTTP.
-    const secure = request.headers.get("X-Forwarded-Proto") === "https" ? "; Secure" : "";
+    // When the browser is on HTTPS, the cookie is never sent over plain HTTP. The browser's Origin header says
+    // which it is (S378's Apache conf doesn't pass the scheme on); X-Forwarded-Proto covers proxies that do.
+    const https = request.headers.get("X-Forwarded-Proto") === "https" || /^https:\/\//i.test(request.headers.get("Origin") ?? "");
+    const secure = https ? "; Secure" : "";
     return { ok: true, setCookie: `${COOKIE}=${tokenFor(password)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${MAX_AGE_S}${secure}` };
   }
   failures.set(client, { count: (f?.count ?? 0) + 1, until: f?.until ?? now + WINDOW_MS });

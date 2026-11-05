@@ -23,7 +23,7 @@ module.exports = {
             env: {
                 NODE_ENV: "production",
                 HOST: "127.0.0.1",          // only reachable through Apache, not directly on the port
-                PORT: 3100,                 // must match ProxyPass in the Apache conf; check it's free first: ss -tlnp | grep :3100
+                PORT: 2025,                 // S378's Apache conf for dev.sandbox already forwards to localhost:2025; check it's free first: sudo ss -tlnp | grep :2025
 
                 // Password people type to reach the site; share it with participants. deploy.sh won't deploy without it.
                 SITE_PASSWORD: "",

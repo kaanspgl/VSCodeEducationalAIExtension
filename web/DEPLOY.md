@@ -1,6 +1,6 @@
 # Deploying on S378 (dev.sandbox.ok.ubc.ca)
 
-This is the lab's "Deploying Remix app on Linux server" guide filled in for VibeLearner. Apache already serves dev.sandbox.ok.ubc.ca over HTTPS; you point it at the app, which PM2 keeps running on port 3100. The site asks for a password first. Participants' programs run in Judge0 sandboxes in Docker (port 2358), never on the server itself. The model is UBC's EduAI. VibeLearner has no database, so the guide's Prisma and mail steps don't apply.
+This is the lab's "Deploying Remix app on Linux server" guide filled in for VibeLearner. Apache already serves dev.sandbox.ok.ubc.ca over HTTPS and forwards it to port 2025, so the app just has to run there; PM2 keeps it running. The site asks for a password first. Participants' programs run in Judge0 sandboxes in Docker (port 2358), never on the server itself. The model is UBC's EduAI. VibeLearner has no database, so the guide's Prisma and mail steps don't apply.
 
 You need sudo on S378. Run everything below on the server, logged in with your CWL account.
 
@@ -11,11 +11,11 @@ ssh <cwl>@s378.ok.ubc.ca
 cat /etc/os-release              # ID=rhel/centos/fedora: Apache is "httpd". ID=debian/ubuntu: "apache2" (user www-data)
 node -v                          # needs v22.22 or newer (see Troubleshooting to upgrade)
 sudo docker compose version      # Judge0 needs Docker with Compose v2
-ss -tlnp | grep -E ':(3100|2358) '   # no output means both ports are free
+sudo ss -tlnp | grep -E ':(2025|2358) '   # no output means both ports are free
 sudo apachectl -S | grep -i sandbox   # the site's Apache conf file (on S378: /etc/httpd/conf.d/dev.sandbox.ok.ubc.ca.conf)
 ```
 
-If `docker compose` isn't there, Docker Engine with the Compose plugin has to be installed first (ask whoever runs S378; RHEL's own Podman isn't a replacement here). If 3100 is taken, pick another port and use it in steps 3 and 7.
+If `docker compose` isn't there, Docker Engine with the Compose plugin has to be installed first (ask whoever runs S378; RHEL's own Podman isn't a replacement here). If something already listens on 2025, find out whose it is before going on: that's the port the site's Apache conf forwards to (step 7).
 
 ## 2. Group and folder
 
@@ -52,7 +52,7 @@ In `ecosystem.config.cjs`:
 * `SITE_PASSWORD`: the password people type to reach the site. Pick a long one and give it to participants with the study instructions. Changing it later signs everyone out.
 * `EDUAI_API_KEY`: leave it empty until you have it. The site works without it, but the tutor answers "EduAI API key missing." If EduAI gives you a model name or course code, put them in `VL_MODEL` and in `vibelearner.config.json` (`"courseCode"`).
 * `JUDGE0_AUTH_TOKEN`: comes from step 4.
-* `PORT`, only if 3100 was taken.
+* `PORT` stays 2025, the port S378's Apache conf forwards dev.sandbox to. Change it only on another server.
 
 Values set in `ecosystem.config.cjs` win over the same settings in `vibelearner.config.json`.
 
@@ -92,31 +92,31 @@ pm2 startup               # then run the sudo command it prints, so the app come
 ```bash
 cd /srv/www/vibelearner/web
 ./deploy.sh
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3100/login   # 200 means the app is up
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:2025/login   # 200 means the app is up
 ```
 
 The script refuses to start until `SITE_PASSWORD`, `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` are filled in, and checks Node. Then it pulls the branch, runs `npm ci` and `npm run build`, (re)starts the app under PM2, saves the process list, and runs a quick Judge0 check (a warning, not a stop, if Judge0 is down). It doesn't touch Apache: a deploy doesn't change Apache's config, and S378's Apache also serves about ten other lab sites that a restart would interrupt.
 
-## 7. Point Apache at the app
+## 7. Apache
 
-Edit the conf file found in step 1 (on S378: `sudo nano /etc/httpd/conf.d/dev.sandbox.ok.ubc.ca.conf`). If it starts with `# Ansible managed`, ask whoever manages the server before editing. Put this inside the `<VirtualHost *:443>` block, or at the top level if the file has no `<VirtualHost>` block:
+On S378 there's nothing to edit. The site's conf, `/etc/httpd/conf.d/dev.sandbox.ok.ubc.ca.conf`, already forwards everything to `http://localhost:2025/`, where the app runs. Its first line says `# Ansible managed`, so hand edits could be overwritten; leave it as it is. Check the site through Apache from the server:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://dev.sandbox.ok.ubc.ca/login   # 200 means Apache reaches the app
+```
+
+On another server, put this in the site's `<VirtualHost *:443>` block (or at the top level if there's none), with the app's PORT:
 
 ```apache
-ProxyPreserveHost On
-RequestHeader set X-Forwarded-Proto "https"
 <Location />
-    ProxyPass http://127.0.0.1:3100/
-    ProxyPassReverse http://127.0.0.1:3100/
+    ProxyPass http://localhost:2025/
+    ProxyPassReverse http://localhost:2025/
 </Location>
 ```
 
-`X-Forwarded-Proto` tells the app the browser is on HTTPS, so the password cookie is never sent over plain HTTP. Use `127.0.0.1`, not `localhost`: the app only listens on IPv4 loopback, and `localhost` can resolve to `::1` first. On Debian/Ubuntu, run `sudo a2enmod proxy proxy_http headers` first.
+Then `sudo apachectl configtest && sudo systemctl reload httpd` (`apache2` on Debian/Ubuntu, after `sudo a2enmod proxy proxy_http`). Reload, don't restart, on a server shared with other sites: a reload doesn't drop their connections, and the `&&` runs it only if the test says "Syntax OK". Also add the site's host name to `allowedActionOrigins` in `react-router.config.ts` and deploy: behind Apache the app sees its own address rather than the browser's, and React Router turns away the password form from any host not listed there.
 
-```bash
-sudo apachectl configtest && sudo systemctl reload httpd    # apache2 on Debian/Ubuntu
-```
-
-Reload, don't restart: the same Apache serves the other lab sites on S378. A reload picks up the change without dropping their connections, and the `&&` runs it only if the test says "Syntax OK", so a typo can't take every site down.
+The password cookie is marked HTTPS-only whenever the password form was posted from an HTTPS page, so Apache doesn't need to pass anything extra.
 
 Then open https://dev.sandbox.ok.ubc.ca: it asks for the site password, then shows the start screen. Ask for a small program and press ▶ Run (until the EduAI key is in, the tutor can't write code, but ▶ Run works on any .py or .js file you open).
 
@@ -132,7 +132,8 @@ A deploy restarts the app, and sessions live in its memory, so it ends any open 
 
 ## Troubleshooting
 
-* **"Service Unavailable"**: run `pm2 status` and `pm2 logs VibeLearner`, and check that PORT is the same in `ecosystem.config.cjs` and the Apache conf. If `curl http://127.0.0.1:3100/login` gives 200 but the site still shows 503 on a RHEL server, SELinux may be stopping Apache from connecting to the port: `getsebool httpd_can_network_connect`, and if it's off, `sudo setsebool -P httpd_can_network_connect 1`.
+* **"Service Unavailable"**: run `pm2 status` and `pm2 logs VibeLearner`, and check that PORT is the same in `ecosystem.config.cjs` and the Apache conf. If `curl http://127.0.0.1:2025/login` gives 200 but the site still shows 503, `sudo tail -20 /etc/httpd/logs/error_log` says why. On RHEL, SELinux may be stopping Apache from connecting to the port: check `getsebool httpd_can_network_connect`. If it's off, ask the server's admin to turn it on (it applies to every site on the server).
+* **"Bad Request" after entering the password**: the host in the browser's address bar isn't in `allowedActionOrigins` in `react-router.config.ts`. Add it, push, and deploy.
 * **"The code runner isn't responding"** in the app, or `check:runner` can't list languages: in `web/judge0`, run `sudo docker compose ps` (four services, all up) and `sudo docker compose logs --tail 50 server workers`. `pm2 logs VibeLearner` shows the exact request that failed. `sudo ./setup.sh` again starts whatever isn't running.
 * **"The code runner refused the request"**: `JUDGE0_AUTH_TOKEN` doesn't match `AUTHN_TOKEN` in `web/judge0/judge0.conf`.
 * **Wrong site password even though it's right**: after changing `SITE_PASSWORD`, run `./deploy.sh --force` (PM2 reads the file only when the app starts). Ten wrong tries lock that browser out for a minute.
