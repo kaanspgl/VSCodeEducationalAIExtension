@@ -118,6 +118,7 @@ export class VibeSession {
   private readonly logger = new StudyLogger();
 
   private level: Level = "guided";
+  private part = 1;
   private clarify = true;
   private maxClarifications = 2;
   private perChange = 1;
@@ -160,16 +161,24 @@ export class VibeSession {
   }
 
   snapshot(): Snapshot {
-    if (this.view.stage === "setup") this.view.level = parseLevel(loadSettings().get<string>("learning.level"));
     return { view: this.view, editor: this.editorView() };
+  }
+
+  /** "Finish part N": the last line of this part's log, written before the participant moves on. */
+  async endPart() {
+    this.logger.log("part_finished", undefined, { part: this.part, condition: conditionName(this.level), stats: { ...this.stats } });
+    await this.logger.flush();
   }
 
   // ================================================================== setup
 
-  async begin(participant?: string, consent?: boolean, pickedLevel?: string) {
+  /**
+   * Starts one part of a participant's study session. They signed in with their code (after consenting), and the
+   * part's condition comes from their code's order; each part has its own project folder, kept across visits.
+   */
+  async begin(opts: { participant: string; level: Level; part: number; parts: number }) {
     if (this.view.stage === "chat") return;
     const cfg = (this.cfg = loadSettings());
-    this.level = parseLevel(cfg.get<string>("learning.level"));
     this.clarify = cfg.get<boolean>("learning.clarify") ?? true;
     this.maxClarifications = clamp(cfg.get<number>("learning.maxClarifications") ?? 2, 0, 5);
     this.perChange = clamp(cfg.get<number>("learning.questionsPerChange") ?? 1, 1, 3);
@@ -181,25 +190,21 @@ export class VibeSession {
     this.allowSkipSteps = cfg.get<boolean>("learning.allowSkipSteps") ?? true;
     this.requireSteps = cfg.get<boolean>("learning.requireSteps") ?? false;
 
-    const code = (participant ?? "").trim();
-    // The Start-screen picker applies only outside research sessions; study conditions come from settings.
-    if (!code && pickedLevel) this.level = parseLevel(pickedLevel);
-    if (code) {
-      this.view.setupError = !consent ? "Tick the consent box to turn on research logging, or clear the participant code."
-        : !/^[A-Za-z0-9_-]{2,32}$/.test(code) ? "Participant code must be 2-32 letters, digits, - or _." : undefined;
-      if (this.view.setupError) return this.refresh();
-      this.logger.enable(code, `vibe:${this.level}`);
-      this.view.logging = true;
-      this.view.participant = code;
-      this.logger.log("vibe_session", undefined, {
-        platform: "web", promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: cfg.get("apiProvider"), temperature: cfg.get("temperature"),
-        level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
-        maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
-        projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
-      });
-    }
-    // A participant keeps their files across visits; anyone else gets a folder for this browser.
-    this.ws = new Workspace(path.join(DATA_DIR, "workspaces", code ? `p-${safeName(code)}` : `anon-${safeName(this.id)}`));
+    const code = opts.participant;
+    this.level = opts.level;
+    this.part = opts.part;
+    this.logger.enable(code, `vibe:${this.level}`, opts.part);
+    this.view.logging = true;
+    this.view.participant = code;
+    this.view.part = { index: opts.part, total: opts.parts };
+    this.logger.log("vibe_session", undefined, {
+      platform: "web", part: opts.part, promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: cfg.get("apiProvider"), temperature: cfg.get("temperature"),
+      level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
+      maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
+      projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
+    });
+    // Each part has its own folder (a different task), kept across visits.
+    this.ws = new Workspace(path.join(DATA_DIR, "workspaces", `p-${safeName(code)}`, `part-${opts.part}`));
     await this.ws.ensure();
 
     this.view.setupError = undefined;

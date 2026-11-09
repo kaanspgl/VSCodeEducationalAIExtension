@@ -1,6 +1,6 @@
 # Deploying on S378 (dev.sandbox.ok.ubc.ca)
 
-This is the lab's "Deploying Remix app on Linux server" guide filled in for VibeLearner. Apache already serves dev.sandbox.ok.ubc.ca over HTTPS and forwards it to port 2025, so the app just has to run there; PM2 keeps it running. The site asks for a password first. Participants' programs run in Judge0 sandboxes in Docker (port 2358), never on the server itself. The model is UBC's EduAI. VibeLearner has no database, so the guide's Prisma and mail steps don't apply.
+This is the lab's "Deploying Remix app on Linux server" guide filled in for VibeLearner. Apache already serves dev.sandbox.ok.ubc.ca over HTTPS and forwards it to port 2025, so the app just has to run there; PM2 keeps it running. Participants read the consent form first, then sign in with the code and PIN on their card; the research team uses /admin. Participants' programs run in Judge0 sandboxes in Docker (port 2358), never on the server itself. The model is UBC's EduAI. VibeLearner has no database, so the guide's Prisma and mail steps don't apply.
 
 You need sudo on S378. Run everything below on the server, logged in with your CWL account.
 
@@ -19,7 +19,7 @@ If `docker compose` isn't there, Docker Engine with the Compose plugin has to be
 
 ## 2. Group and folder
 
-The app goes in its own folder, outside the sandbox site's DocumentRoot: `data/` holds participant logs and `ecosystem.config.cjs` holds the passwords and keys, and outside the DocumentRoot Apache can never serve them as plain files. The old sandbox contents can stay or be deleted.
+The app goes in its own folder, outside the sandbox site's DocumentRoot: `data/` holds participant logs and `ecosystem.config.cjs` holds the passwords and keys (and `data/participants.json` the codes, with PINs only as hashes), and outside the DocumentRoot Apache can never serve them as plain files. The old sandbox contents can stay or be deleted.
 
 ```bash
 getent group vibelearner || sudo groupadd vibelearner
@@ -42,14 +42,14 @@ cd /srv/www/vibelearner
 git clone -b web-platform https://github.com/kaanspgl/VSCodeEducationalAIExtension.git .
 cd web
 cp ecosystem.config.example.cjs ecosystem.config.cjs
-cp vibelearner.config.example.json vibelearner.config.json   # optional: study condition (learning.level) and other settings
+cp vibelearner.config.example.json vibelearner.config.json   # optional: model and learning settings
 chmod +x deploy.sh judge0/setup.sh
 nano ecosystem.config.cjs
 ```
 
 In `ecosystem.config.cjs`:
 
-* `SITE_PASSWORD`: the password people type to reach the site. Pick a long one and give it to participants with the study instructions. Changing it later signs everyone out.
+* `ADMIN_PASSWORD`: the research team's password for https://dev.sandbox.ok.ubc.ca/admin, where you make participant codes, print their cards and see the results. Pick a long one and don't give it to participants. Changing it signs the team out. Without it the admin pages stay closed.
 * `EDUAI_API_KEY`: leave it empty until you have it. The site works without it, but the tutor answers "EduAI API key missing." If EduAI gives you a model name or course code, put them in `VL_MODEL` and in `vibelearner.config.json` (`"courseCode"`).
 * `JUDGE0_AUTH_TOKEN`: comes from step 4.
 * `PORT` stays 2025, the port S378's Apache conf forwards dev.sandbox to. Change it only on another server.
@@ -95,7 +95,7 @@ cd /srv/www/vibelearner/web
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:2025/login   # 200 means the app is up
 ```
 
-The script refuses to start until `SITE_PASSWORD`, `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` are filled in, and checks Node. Then it pulls the branch, runs `npm ci` and `npm run build`, (re)starts the app under PM2, saves the process list, and runs a quick Judge0 check (a warning, not a stop, if Judge0 is down). It doesn't touch Apache: a deploy doesn't change Apache's config, and S378's Apache also serves about ten other lab sites that a restart would interrupt.
+The script refuses to start until `ADMIN_PASSWORD`, `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` are filled in, and checks Node. Then it pulls the branch, runs `npm ci` and `npm run build`, (re)starts the app under PM2, saves the process list, and runs a quick Judge0 check (a warning, not a stop, if Judge0 is down). It doesn't touch Apache: a deploy doesn't change Apache's config, and S378's Apache also serves about ten other lab sites that a restart would interrupt.
 
 ## 7. Apache
 
@@ -114,11 +114,11 @@ On another server, put this in the site's `<VirtualHost *:443>` block (or at the
 </Location>
 ```
 
-Then `sudo apachectl configtest && sudo systemctl reload httpd` (`apache2` on Debian/Ubuntu, after `sudo a2enmod proxy proxy_http`). Reload, don't restart, on a server shared with other sites: a reload doesn't drop their connections, and the `&&` runs it only if the test says "Syntax OK". Also add the site's host name to `allowedActionOrigins` in `react-router.config.ts` and deploy: behind Apache the app sees its own address rather than the browser's, and React Router turns away the password form from any host not listed there.
+Then `sudo apachectl configtest && sudo systemctl reload httpd` (`apache2` on Debian/Ubuntu, after `sudo a2enmod proxy proxy_http`). Reload, don't restart, on a server shared with other sites: a reload doesn't drop their connections, and the `&&` runs it only if the test says "Syntax OK". Also add the site's host name to `allowedActionOrigins` in `react-router.config.ts` and deploy: behind Apache the app sees its own address rather than the browser's, and React Router turns away the sign-in forms from any host not listed there.
 
-The password cookie is marked HTTPS-only whenever the password form was posted from an HTTPS page, so Apache doesn't need to pass anything extra.
+The sign-in cookies are marked HTTPS-only whenever the form was posted from an HTTPS page, so Apache doesn't need to pass anything extra.
 
-Then open https://dev.sandbox.ok.ubc.ca: it asks for the site password, then shows the start screen. Ask for a small program and press ▶ Run (until the EduAI key is in, the tutor can't write code, but ▶ Run works on any .py or .js file you open).
+Then open https://dev.sandbox.ok.ubc.ca/admin, sign in with `ADMIN_PASSWORD` and make a test code. Open https://dev.sandbox.ok.ubc.ca in a private window: it shows the consent form, then asks for the code and PIN. Ask for a small program and press ▶ Run (until the EduAI key is in, the tutor can't write code, but ▶ Run works on any .py or .js file you open). Test codes show up in the results like any other, so before the study starts, stop the app and delete `data/` (it's made again, empty, on the next start).
 
 ## Later deploys
 
@@ -133,10 +133,11 @@ A deploy restarts the app, and sessions live in its memory, so it ends any open 
 ## Troubleshooting
 
 * **"Service Unavailable"**: run `pm2 status` and `pm2 logs VibeLearner`, and check that PORT is the same in `ecosystem.config.cjs` and the Apache conf. If `curl http://127.0.0.1:2025/login` gives 200 but the site still shows 503, `sudo tail -20 /etc/httpd/logs/error_log` says why. On RHEL, SELinux may be stopping Apache from connecting to the port: check `getsebool httpd_can_network_connect`. If it's off, ask the server's admin to turn it on (it applies to every site on the server).
-* **"Bad Request" after entering the password**: the host in the browser's address bar isn't in `allowedActionOrigins` in `react-router.config.ts`. Add it, push, and deploy.
+* **"Bad Request" after signing in**: the host in the browser's address bar isn't in `allowedActionOrigins` in `react-router.config.ts`. Add it, push, and deploy.
 * **"The code runner isn't responding"** in the app, or `check:runner` can't list languages: in `web/judge0`, run `sudo docker compose ps` (four services, all up) and `sudo docker compose logs --tail 50 server workers`. `pm2 logs VibeLearner` shows the exact request that failed. `sudo ./setup.sh` again starts whatever isn't running.
 * **"The code runner refused the request"**: `JUDGE0_AUTH_TOKEN` doesn't match `AUTHN_TOKEN` in `web/judge0/judge0.conf`.
-* **Wrong site password even though it's right**: after changing `SITE_PASSWORD`, run `./deploy.sh --force` (PM2 reads the file only when the app starts). Ten wrong tries lock that browser out for a minute.
+* **Wrong admin password even though it's right**: after changing `ADMIN_PASSWORD`, run `./deploy.sh --force` (PM2 reads the file only when the app starts). Ten wrong tries lock that browser out for a minute; the same goes for participants' PINs.
+* **A participant lost their card or pressed Finish by mistake**: on /admin, "New PIN" prints a new PIN for that code (the old one stops working), and "Move" puts them back on a part.
 * **Node too old**: `sudo npm install n -g`, then `sudo -E env "PATH=$PATH" n lts`, `hash -r`, `node -v`.
 * **Permission denied in npm ci or the build**: log out and back in after the group change, and check `groups`.
 

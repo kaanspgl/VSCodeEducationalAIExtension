@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { data } from "react-router";
-import { requireAccess } from "~/.server/access";
+import { Form } from "react-router";
+import { requireStudent } from "~/.server/access";
+import { PARTS } from "~/.server/participants";
 import { sessionFor } from "~/.server/sessions";
 import { ChatPanel } from "~/components/ChatPanel";
 import { EditorPane } from "~/components/EditorPane";
-import { Setup } from "~/components/Setup";
 import type { Snapshot } from "~/lib/types";
 import type { Route } from "./+types/home";
 
@@ -16,13 +16,19 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  requireAccess(request, "page");
-  const { session, setCookie } = await sessionFor(request);
-  return data(session.snapshot(), setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined);
+  const p = requireStudent(request, "page");
+  if (p.part > PARTS) return { done: true as const, code: p.code };
+  const { session } = await sessionFor(p);
+  return { done: false as const, snap: session.snapshot() };
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const [snap, setSnap] = useState<Snapshot>(loaderData);
+  if (loaderData.done) return <Finished code={loaderData.code} />;
+  return <Coding initial={loaderData.snap} />;
+}
+
+function Coding({ initial }: { initial: Snapshot }) {
+  const [snap, setSnap] = useState<Snapshot>(initial);
   const [connected, setConnected] = useState(true);
 
   useEffect(() => {
@@ -37,12 +43,25 @@ export default function Home({ loaderData }: Route.ComponentProps) {
   }, []);
 
   const { view, editor } = snap;
-  if (view.stage === "setup") return <Setup view={view} />;
   return (
     <div className="layout">
       {!connected && <div className="offline">Reconnecting to the server…</div>}
       <EditorPane editor={editor} view={view} />
       <ChatPanel view={view} />
+    </div>
+  );
+}
+
+/** Both parts are done. */
+function Finished({ code }: { code: string }) {
+  return (
+    <div className="center-card">
+      <h1><span className="dot" />VibeLearner</h1>
+      <p>You've finished both parts. Thank you, <b>{code}</b>!</p>
+      <p className="muted">Please let the researcher know you're done.</p>
+      <Form method="post" action="/logout">
+        <button className="btn secondary" type="submit">Sign out</button>
+      </Form>
     </div>
   );
 }

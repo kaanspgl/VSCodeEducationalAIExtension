@@ -55,10 +55,10 @@ if [ ! -f "ecosystem.config.cjs" ]; then
     echo "Create it from ecosystem.config.example.cjs and fill in environment values."
     exit 1
 fi
-# The site needs its password and Judge0 before it goes up; the model's API key can come later.
+# The admin pages need their password and programs need Judge0 before the site goes up; the model's API key can come later.
 node -e '
 const env = require("./ecosystem.config.cjs").apps?.[0]?.env ?? {};
-const missing = ["SITE_PASSWORD", "JUDGE0_URL", "JUDGE0_AUTH_TOKEN"].filter((k) => !env[k]);
+const missing = ["ADMIN_PASSWORD", "JUDGE0_URL", "JUDGE0_AUTH_TOKEN"].filter((k) => !env[k]);
 if (missing.length) { console.error("Fill in " + missing.join(", ") + " in ecosystem.config.cjs first (see DEPLOY.md)."); process.exit(1); }
 ' || exit 1
 if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 22) ? 0 : 1)' 2>/dev/null; then

@@ -32,7 +32,8 @@ export type VibeView = {
   level: Level;
   logging: boolean;
   participant: string;
-  /** Shown on the Start screen when a participant code or consent is missing. */
+  /** Which part of the study session this is (each part has its own condition and project folder). */
+  part?: { index: number; total: number };
   setupError?: string;
   messages: VibeMsg[];
   busy: boolean;
@@ -73,7 +74,7 @@ export type Snapshot = { view: VibeView; editor: EditorView };
 
 /** Messages from the browser to the session (POST /api/command). */
 export type Command =
-  | { type: "begin"; participant?: string; consent?: boolean; level?: string }
+  | { type: "finishPart" }
   | { type: "send"; text: string; target?: string }
   | { type: "action"; cmd: string; arg?: string }
   | { type: "quizAnswer"; choice: number }

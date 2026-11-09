@@ -50,6 +50,7 @@ export function ChatPanel({ view }: { view: VibeView }) {
           </select>
         </label>
         {view.logging && <span className="badge" title="Research logging is on">● {view.participant}</span>}
+        {view.part && <FinishPart part={view.part} busy={busy} />}
       </header>
 
       {learn && <Progress view={view} />}
@@ -137,6 +138,23 @@ export function ChatPanel({ view }: { view: VibeView }) {
         </div>
       </main>
     </section>
+  );
+}
+
+/** "Part 1 of 2" and the button that moves the participant on (to a new project folder and the other condition). */
+function FinishPart({ part, busy }: { part: NonNullable<VibeView["part"]>; busy: boolean }) {
+  const last = part.index >= part.total;
+  const finish = () => {
+    const ask = last
+      ? `Finish part ${part.index}? This ends your VibeLearner session.`
+      : `Finish part ${part.index} and go on to part ${part.index + 1}? You can't come back to part ${part.index}.`;
+    if (window.confirm(ask)) void post({ type: "finishPart" });
+  };
+  return (
+    <>
+      <span className="badge partchip">Part {part.index} of {part.total}</span>
+      <button className="btn sm secondary" disabled={busy} onClick={finish}>Finish part {part.index}</button>
+    </>
   );
 }
 

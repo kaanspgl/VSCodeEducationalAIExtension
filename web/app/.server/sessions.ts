@@ -1,50 +1,58 @@
-import { randomUUID } from "node:crypto";
-import { createCookie } from "react-router";
 import type { Command, Snapshot } from "~/lib/types";
+import { conditionFor, finishPart, markPartStarted, PARTS, type Participant } from "./participants";
 import { VibeSession } from "./session";
 
 /**
- * One VibeSession per browser, found by a cookie. Sessions live in server memory (a restart ends them; files and
- * research logs are on disk). The browser gets every change over Server-Sent Events.
+ * One VibeSession per participant and part, found by the sign-in cookie (so a reload, or a second tab, carries on
+ * where they were). Sessions live in server memory: a restart ends them, but files and research logs are on disk.
+ * The browser gets every change over Server-Sent Events.
  */
-const sidCookie = createCookie("vl_sid", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
-
-type Entry = { session: VibeSession; listeners: Set<(s: Snapshot) => void> };
+type Entry = { session: VibeSession; listeners: Set<(s: Snapshot) => void>; ready: Promise<void> };
 const g = globalThis as unknown as { __vibeSessions?: Map<string, Entry> };
 // Kept on globalThis so dev-server reloads don't drop running sessions.
 const sessions = (g.__vibeSessions ??= new Map<string, Entry>());
 
-function entry(sid: string): Entry {
-  let e = sessions.get(sid);
+const keyOf = (p: Participant) => `${p.code}#${p.part}`;
+
+/** The participant's session for the part they're on, started (and the part marked as started) the first time. */
+export async function sessionFor(p: Participant): Promise<{ key: string; session: VibeSession }> {
+  const key = keyOf(p);
+  let e = sessions.get(key);
   if (!e) {
+    const level = conditionFor(p);
+    if (!level) throw new Error(`${p.code} has finished both parts.`);
     const listeners = new Set<(s: Snapshot) => void>();
-    const session = new VibeSession(sid, (s) => listeners.forEach((l) => l(s)));
-    e = { session, listeners };
-    sessions.set(sid, e);
+    const session = new VibeSession(key, (s) => listeners.forEach((l) => l(s)));
+    const ready = session.begin({ participant: p.code, level, part: p.part, parts: PARTS });
+    e = { session, listeners, ready };
+    sessions.set(key, e);
+    markPartStarted(p.code, p.part);
+    ready.catch(() => sessions.delete(key));
   }
-  return e;
+  await e.ready;
+  return { key, session: e.session };
 }
 
-/** The browser's session id, creating one (and the Set-Cookie header for it) if needed. */
-export async function sessionFor(request: Request): Promise<{ sid: string; session: VibeSession; setCookie?: string }> {
-  const existing = await sidCookie.parse(request.headers.get("Cookie"));
-  if (typeof existing === "string" && /^[\w-]{8,64}$/.test(existing)) return { sid: existing, session: entry(existing).session };
-  // Not kept until the browser comes back with the cookie, so crawlers and health checks don't pile up sessions.
-  const sid = randomUUID();
-  return { sid, session: new VibeSession(sid, () => {}), setCookie: await sidCookie.serialize(sid) };
-}
-
-export function subscribe(sid: string, listener: (s: Snapshot) => void): () => void {
-  const e = entry(sid);
+export function subscribe(key: string, listener: (s: Snapshot) => void): () => void {
+  const e = sessions.get(key);
+  if (!e) return () => {};
   e.listeners.add(listener);
   return () => e.listeners.delete(listener);
+}
+
+/** "Finish part N": the session's last log line, then the participant moves on and this session is let go. */
+export async function finishCurrentPart(p: Participant) {
+  const key = keyOf(p);
+  const e = sessions.get(key);
+  if (e) await e.session.endPart();
+  finishPart(p.code, p.part);
+  sessions.delete(key);
 }
 
 /** Runs a browser command. Model calls can take minutes, so this isn't awaited by the request; results arrive as events. */
 export function dispatch(session: VibeSession, cmd: Command) {
   const run = async () => {
     switch (cmd.type) {
-      case "begin": return session.begin(String(cmd.participant ?? ""), !!cmd.consent, cmd.level ? String(cmd.level) : undefined);
       case "send": return session.send(String(cmd.text ?? ""), cmd.target ? String(cmd.target) : undefined);
       case "action": return session.action(String(cmd.cmd ?? ""), cmd.arg === undefined ? undefined : String(cmd.arg));
       case "quizAnswer": return session.answerQuiz(Number(cmd.choice));

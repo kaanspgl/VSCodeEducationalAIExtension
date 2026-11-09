@@ -194,3 +194,65 @@ form.inline input { width: 150px; padding: 3px 8px; border-radius: 6px; font-siz
   .edbar { flex-wrap: wrap; }
   .edbar .stdin { width: auto; flex: 1; min-width: 120px; }
 }
+
+/* consent page */
+.center-card.consent { max-width: 760px; font-size: 14px; line-height: 1.5; }
+.consent h2 { font-size: 15px; margin: 10px 0 2px; }
+.consent p, .consent ul { margin: 4px 0; }
+.consent-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border-top: 1px solid var(--border); padding-top: 12px; }
+.consent-actions .btn { text-decoration: none; }
+.partchip { color: var(--text); font-weight: 600; }
+
+/* admin */
+.admin { max-width: 1280px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.admin h1 { font-size: 18px; margin: 0; }
+.admin h2 { font-size: 15px; margin: 0; }
+.admin h3 { font-size: 13px; margin: 12px 0 4px; font-family: var(--mono); }
+.admin a { color: var(--accent); }
+.admin-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.admin .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin section > .row { margin-bottom: 8px; }
+.admin input, .admin select { background: var(--input); color: var(--input-fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font: inherit; }
+.admin .num { width: 64px; }
+.big { font-size: 18px; font-weight: 700; }
+.okmsg { padding: 8px 12px; border: 1px solid var(--ok); border-radius: 8px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+table.results { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.results th, .results td { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: top; }
+.results th { background: var(--panel); font-weight: 600; color: var(--muted); }
+.results tr.first td { border-top: 2px solid var(--border); }
+.results td.actions { display: table-cell; }
+.results td.actions form { margin: 2px 0; }
+.cond { padding: 1px 7px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--border); }
+.cond.structured { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cond.regular { background: color-mix(in srgb, var(--warn-c) 14%, transparent); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-top: 8px; }
+.card { border: 1px dashed var(--text); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab { padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; text-decoration: none; color: var(--text) !important; }
+.tab.active { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.stat { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel); }
+.admin-cols { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.timeline { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; }
+.timeline li { border-bottom: 1px solid var(--border); }
+.timeline li:last-child { border-bottom: none; }
+.timeline summary { display: grid; grid-template-columns: 68px 52px minmax(0, 1fr); gap: 8px; padding: 5px 8px; cursor: pointer; font-size: 12.5px; }
+.timeline .t, .timeline .since { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.timeline .what { overflow-wrap: anywhere; }
+.timeline pre { margin: 0 8px 8px; max-height: 320px; font-size: 11.5px; }
+.ev-vibe_request .what { font-weight: 600; }
+.ev-consent .what, .ev-sign_in .what, .ev-vibe_session .what, .ev-part_finished .what { color: var(--accent); font-weight: 600; }
+.ev-vibe_error .what, .ev-parse_failure .what { color: var(--bad); }
+.filelist { list-style: none; padding: 0; margin: 6px 0; font-family: var(--mono); font-size: 12.5px; }
+.filelist a.active { font-weight: 700; }
+.filecontent { max-height: 70vh; }
+@media (max-width: 900px) { .admin-cols { grid-template-columns: 1fr; } }
+
+@media print {
+  .noprint { display: none !important; }
+  body { background: #fff; color: #000; }
+  .center-card { border: none; margin: 0; max-width: none; }
+  .admin { padding: 0; }
+  .card { border-color: #000; }
+}

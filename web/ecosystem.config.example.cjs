@@ -25,8 +25,9 @@ module.exports = {
                 HOST: "127.0.0.1",          // only reachable through Apache, not directly on the port
                 PORT: 2025,                 // S378's Apache conf for dev.sandbox already forwards to localhost:2025; check it's free first: sudo ss -tlnp | grep :2025
 
-                // Password people type to reach the site; share it with participants. deploy.sh won't deploy without it.
-                SITE_PASSWORD: "",
+                // The research team's password for /admin (participant codes, results, downloads). Participants sign
+                // in with the code and PIN on their card instead. deploy.sh won't deploy without it.
+                ADMIN_PASSWORD: "",
 
                 // Model: UBC's EduAI. Until EDUAI_API_KEY is filled in, the site works but the tutor answers
                 // "EduAI API key missing." Empty values are ignored.
@@ -42,7 +43,7 @@ module.exports = {
                 JUDGE0_URL: "http://127.0.0.1:2358",
                 JUDGE0_AUTH_TOKEN: "",
 
-                // Everything else (learning.level for the study condition, EduAI's courseCode, ...) goes in
+                // Everything else (EduAI's courseCode, the learning.* settings, ...) goes in
                 // vibelearner.config.json, which is re-read at every session start, so no restart is needed.
             },
         },
