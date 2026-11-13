@@ -16,7 +16,7 @@
  *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v5-2026-10';
+export const VIBE_PROMPT_VERSION = 'vibe-v6-2026-11';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -84,9 +84,32 @@ export function actionSystem(level: Level, where = 'inside VS Code'): string {
   ].join('\n');
 }
 
-export function actionPrompt(contextText: string, request: string, planText?: string, studentIdea?: string, studentSteps?: string): string {
+export type ChallengeLike = { path: string; task: string; open: boolean };
+
+/**
+ * The Modify challenges set on this project. While one is open, its file holds the student's work in progress, which
+ * is MEANT to differ from the request the code was first written for; once done, that is what the program is for.
+ * Without this, a model that reads the first request in the history "fixes" the student's work back.
+ */
+export function challengeNote(challenges: ChallengeLike[]): string {
+  const name = (cs: ChallengeLike[]) => cs.map(c => `"${c.task}" (in ${c.path})`).join('; ');
+  const open = challenges.filter(c => c.open);
+  const done = challenges.filter(c => !c.open).slice(-3);
+  return [
+    open.length ? [
+      `\nMODIFY CHALLENGE IN PROGRESS: after the code was written, the student was set this small change to make: ${name(open)}.`,
+      'The file is their work in progress on it, so it is MEANT to differ from the request the code was first written for. Never undo it, change it back, or point it out as a mistake.',
+      '- If they ask a question, answer it in plain words without changing any code (no SEARCH/REPLACE blocks).',
+      '- If they ask you to make a change (asking you is one way to do the challenge), make exactly the change they describe and nothing else.',
+    ].join('\n') : '',
+    done.length ? `\nFINISHED MODIFY CHALLENGES: the student changed the code on purpose to: ${name(done)}. That is what the program is meant to do now; do not change it back.` : '',
+  ].join('');
+}
+
+export function actionPrompt(contextText: string, request: string, planText?: string, studentIdea?: string, studentSteps?: string, challenges?: string): string {
   return [
     contextText,
+    challenges ?? '',
     planText ? `\n${planText}` : '',
     studentIdea ? `\nTHE STUDENT'S IDEA (Step 1): ${studentIdea}` : '',
     studentSteps ? `\nTHE STUDENT'S STEPS (Step 2) — write the code from these, step by step, and add a short comment naming each step:\n${studentSteps}` : '',

@@ -1,14 +1,18 @@
 import path from "node:path";
+import { readConsent } from "./consent";
+import { protocolFor, studyFingerprint, type Protocol } from "./protocol";
+import { CODE_RE, findParticipant, readRoster } from "./roster";
+import { levelForPart, quizUrl, readStudy, readProgress, writeProgress, type Progress, type StudyPart } from "./study";
 import { extractJson, stripThinking } from "@core/study/prompts";
 import { matchChoices, onlyWordingChanged, sameResult } from "@core/vibe/checks";
 import { formatContext, numbered, type ContextFile, type Selection } from "@core/vibe/contextFormat";
-import { applyBlocks, blocksToText, fencedToBlocks, locateLines, parseBlocks, type EditBlock } from "@core/vibe/edits";
+import { applyBlocks, blocksToText, fencedToBlocks, locateLines, parseBlocks, placeUnnamedBlocks, type EditBlock } from "@core/vibe/edits";
 import * as P from "@core/vibe/prompts";
 import type { EditorView, Level, MsgButton, Snapshot, Stage, StageStatus, VibeChange, VibeMsg, VibeView } from "~/lib/types";
 import { DATA_DIR, loadSettings, type Settings } from "./config";
-import { callBackend, type ChatMsg } from "./llm";
+import { callBackend, modelChoice, type ChatMsg } from "./llm";
 import { safeName, StudyLogger } from "./logger";
-import { runFile, runnerOptions, runProgram, type RunnerOptions } from "./runner";
+import { runFile, runProgram, runTargetFor, type RunTarget } from "./runner";
 import { Workspace } from "./workspace";
 
 /*
@@ -23,6 +27,12 @@ const STAGE_LABEL: Record<Stage, string> = { tour: "Walk through", predict: "Pre
 const INPUT_RE = /\binput\s*\(|sys\.stdin|readline|process\.stdin|prompt\s*\(/;
 /** Where the assistant says it lives, in its system prompt. */
 const WHERE = "inside a web-based code editor";
+/** What each JSON model call is for, as it is named in the log. */
+const CALL_NAME = new Map<string, string>([
+  [P.ROUTER_SYSTEM, "route"], [P.IDEA_SYSTEM, "idea_check"], [P.STEPS_SYSTEM, "steps_check"], [P.PLAN_SYSTEM, "plan"], [P.TOUR_SYSTEM, "walkthrough"],
+  [P.RUN_INPUT_SYSTEM, "run_input"], [P.PREDICT_FEEDBACK_SYSTEM, "predict_feedback"], [P.CHANGE_QUIZ_SYSTEM, "question"],
+  [P.PROJECT_QUIZ_SYSTEM, "project_quiz"], [P.CHALLENGE_SYSTEM, "challenge"], [P.CHALLENGE_CHECK_SYSTEM, "challenge_check"],
+]);
 
 type ProjectContext = {
   /** Text block given to the model: file listing, file contents (numbered), and selection. */
@@ -57,6 +67,8 @@ type Proposal = {
   learn: Record<Stage, StageStatus>;
   challenge?: { task: string; hint: string; criteria: string; baseline: string; msgId: number; viaAi: boolean; open: boolean; before?: string; expected?: string };
   nextPrompted?: boolean;
+  /** The "all three steps done" message has been shown. */
+  wrapped?: boolean;
 };
 
 type Plan = {
@@ -65,7 +77,8 @@ type Plan = {
   request: string;
 };
 
-type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean };
+/** `answerOnly`: a question asked during a Modify challenge, answered without changing any code. */
+type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean; answerOnly?: boolean };
 
 /** Before any code is written: explain the idea (and, with requireSteps, write the steps). */
 type Gate = {
@@ -113,19 +126,35 @@ export class VibeSession {
 
   private cfg: Settings = loadSettings();
   private ws!: Workspace;
+  /** The study plan this participant is going through, the condition of its first part, and where they are in it. */
+  private study?: { parts: StudyPart[]; endUrl: string; first: Level; prog: Progress; code: string };
+  /** Set when the participant moves on to the next part: the server then starts a fresh session for it. */
+  restart = false;
+
+  /** The participant code of a research session ("" otherwise). */
+  get participant(): string {
+    return this.view.participant;
+  }
   private files: string[] = [];
   private ed: EditorState = { mode: "none", version: 0, readOnly: false };
   private readonly logger = new StudyLogger();
 
   private level: Level = "guided";
-  private part = 1;
   private clarify = true;
   private maxClarifications = 2;
   private perChange = 1;
   private projectQuizCount = 3;
   private maxChars = 24000;
+  /** What this session may do beyond the basics (see protocol.ts): a study session keeps to the study's protocol. */
+  private promptTips = true;
+  private planBuilds = true;
+  private progressPanel = true;
+  private sameCodePrompt = false;
+  /** When the current wait for the system started (model calls, runs), for the log. */
+  private busySince: number | undefined;
   private model = "";
-  private runner: RunnerOptions = {};
+  /** Where programs run: this machine, or a Judge0 server (see runner.ts). */
+  private runTarget: RunTarget = {};
   private projectDir: string | undefined;
   private target = "auto";
   private lastRequest: { text: string; opts: ActOpts; student?: { idea?: string; steps?: string } } | undefined;
@@ -156,60 +185,143 @@ export class VibeSession {
     this.view = {
       kind: "vibe", stage: "setup", level: "guided", logging: false, participant: "", messages: [], busy: false, busyLabel: "",
       inputEnabled: false, placeholder: "", concepts: [], skills: [], ctx: { files: 0, active: "", selection: "" }, target: "auto",
-      targets: [], levelLocked: false,
+      targets: [], levelLocked: false, ui: { mode: true, progress: true },
     };
   }
 
   snapshot(): Snapshot {
+    if (this.view.stage === "setup") this.view.level = parseLevel(loadSettings().get<string>("learning.level"));
     return { view: this.view, editor: this.editorView() };
-  }
-
-  /** "Finish part N": the last line of this part's log, written before the participant moves on. */
-  async endPart() {
-    this.logger.log("part_finished", undefined, { part: this.part, condition: conditionName(this.level), stats: { ...this.stats } });
-    await this.logger.flush();
   }
 
   // ================================================================== setup
 
-  /**
-   * Starts one part of a participant's study session. They signed in with their code (after consenting), and the
-   * part's condition comes from their code's order; each part has its own project folder, kept across visits.
-   */
-  async begin(opts: { participant: string; level: Level; part: number; parts: number }) {
-    if (this.view.stage === "chat") return;
+  /** `continued` = the same participant moving on to their next study part (no new sign-in, so no new consent). */
+  async begin(participant?: string, consent?: boolean, pickedLevel?: string, continued = false) {
+    if (this.view.stage !== "setup") return;
     const cfg = (this.cfg = loadSettings());
-    this.clarify = cfg.get<boolean>("learning.clarify") ?? true;
-    this.maxClarifications = clamp(cfg.get<number>("learning.maxClarifications") ?? 2, 0, 5);
-    this.perChange = clamp(cfg.get<number>("learning.questionsPerChange") ?? 1, 1, 3);
-    this.projectQuizCount = clamp(cfg.get<number>("learning.projectQuizQuestions") ?? 3, 1, 6);
-    this.maxChars = clamp(cfg.get<number>("context.maxChars") ?? 24000, 4000, 200000);
-    this.model = cfg.get<string>("model") || "qwen3-coder:30b";
-    this.runner = runnerOptions(cfg);
-    this.maxRoundsPerStep = clamp(cfg.get<number>("learning.maxRoundsPerStep") ?? 3, 1, 8);
-    this.allowSkipSteps = cfg.get<boolean>("learning.allowSkipSteps") ?? true;
-    this.requireSteps = cfg.get<boolean>("learning.requireSteps") ?? false;
+    this.level = parseLevel(cfg.get<string>("learning.level"));
+    const choice = modelChoice(cfg);
+    this.model = choice.model;
+    this.runTarget = runTargetFor(cfg);
 
-    const code = opts.participant;
-    this.level = opts.level;
-    this.part = opts.part;
-    this.logger.enable(code, `vibe:${this.level}`, opts.part);
-    this.view.logging = true;
-    this.view.participant = code;
-    this.view.part = { index: opts.part, total: opts.parts };
-    this.logger.log("vibe_session", undefined, {
-      platform: "web", part: opts.part, promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: cfg.get("apiProvider"), temperature: cfg.get("temperature"),
-      level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
-      maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
-      projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
-    });
-    // Each part has its own folder (a different task), kept across visits.
-    this.ws = new Workspace(path.join(DATA_DIR, "workspaces", `p-${safeName(code)}`, `part-${opts.part}`));
+    let code = (participant ?? "").trim();
+    // The Start-screen picker applies only outside research sessions; study conditions come from settings.
+    if (!code && pickedLevel) this.level = parseLevel(pickedLevel);
+    let studyParts: StudyPart[] = [];
+    if (code) {
+      this.view.setupError = !consent ? "Read the consent form and tick the box before you sign in."
+        : !CODE_RE.test(code) ? "Participant code must be 2-32 letters, digits, - or _." : undefined;
+      if (this.view.setupError) return this.refresh();
+      // With a participant list, only its codes can start a research session, each in its own condition.
+      const roster = readRoster();
+      if (roster.length) {
+        const entry = findParticipant(code, roster);
+        if (!entry || entry.withdrawn) {
+          this.view.setupError = entry
+            ? "That participant code has been withdrawn from the study. Check with the researcher."
+            : "That participant code isn't on the list for this study. Check it with the researcher.";
+          return this.refresh();
+        }
+        code = entry.code;
+        this.level = entry.level;
+      }
+      // With a study plan, the participant works through its parts: carry on where they left off.
+      const { parts, endUrl } = readStudy();
+      studyParts = parts;
+      if (parts.length) {
+        const prog = readProgress(code);
+        // A part without a quiz link has no quiz step.
+        while (prog.part < parts.length) {
+          if (prog.step === "pre" && !parts[prog.part].preUrl) prog.step = "work";
+          else if (prog.step === "post" && !parts[prog.part].postUrl) Object.assign(prog, { part: prog.part + 1, step: "pre", task: 0, started: undefined });
+          else break;
+        }
+        prog.task = Math.min(prog.task, Math.max(0, (parts[prog.part]?.tasks.length ?? 1) - 1));
+        if (prog.step === "work") prog.started ??= Date.now();
+        this.study = { parts, endUrl, first: this.level, prog, code };
+        if (prog.part < parts.length) this.level = levelForPart(this.level, prog.part);
+        writeProgress(code, prog);
+        this.stampTask();
+      }
+    }
+    const protocol = protocolFor(cfg, !!this.study);
+    this.applyProtocol(protocol);
+    if (code) {
+      this.logger.enable(code, `vibe:${this.level}`);
+      this.view.logging = true;
+      this.view.participant = code;
+      if (!continued) this.logger.log("consent", undefined, { given: true, consentVersion: readConsent().version });
+      this.logger.log("vibe_session", undefined, {
+        part: this.study ? this.study.prog.part + 1 : undefined, concept: this.study?.parts[this.study.prog.part]?.concept,
+        order: this.study ? `${conditionName(this.study.first)}-first` : undefined,
+        platform: "web", promptVersion: P.VIBE_PROMPT_VERSION, model: this.model, provider: choice.provider, temperature: cfg.get("temperature"),
+        runner: this.runTarget.judge0 ? "judge0" : "local",
+        level: this.level, condition: conditionName(this.level), clarify: this.clarify, maxClarifications: this.maxClarifications,
+        maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
+        projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
+        strictProtocol: protocol.strict, promptTips: this.promptTips, planLargeBuilds: this.planBuilds, progressPanel: this.progressPanel,
+        sameCodePrompt: this.sameCodePrompt, configHash: this.study ? studyFingerprint(cfg, studyParts).hash : undefined, continued,
+      });
+    }
+    // A participant keeps their files across visits; anyone else gets a folder for this browser.
+    // Each study part gets its own folder, so one part's code is never in front of the AI during the next.
+    const partDir = this.study && this.study.prog.part < this.study.parts.length ? `part${this.study.prog.part + 1}` : "";
+    this.ws = new Workspace(path.join(DATA_DIR, "workspaces", code ? `p-${safeName(code)}` : `anon-${safeName(this.id)}`, partDir));
     await this.ws.ensure();
 
     this.view.setupError = undefined;
-    this.view.stage = "chat";
     this.view.level = this.level;
+    if (this.study) {
+      const { parts, prog } = this.study;
+      if (prog.part >= parts.length) { this.view.stage = "done"; return this.refresh(); }
+      if (prog.step !== "work") {
+        this.view.stage = "survey";
+        this.logger.log("study_step", undefined, { kind: `${prog.step}_quiz_shown`, part: prog.part + 1, concept: parts[prog.part].concept });
+        return this.refresh();
+      }
+      this.logger.log("study_step", undefined, { kind: "question_shown", part: prog.part + 1, question: prog.task + 1, text: parts[prog.part].tasks[prog.task] });
+    }
+    await this.enterChat();
+  }
+
+  private applyProtocol(p: Protocol) {
+    this.clarify = p.clarify;
+    this.maxClarifications = p.maxClarifications;
+    this.perChange = p.questionsPerChange;
+    this.projectQuizCount = p.projectQuizQuestions;
+    this.maxChars = p.contextMaxChars;
+    this.maxRoundsPerStep = p.maxRoundsPerStep;
+    this.allowSkipSteps = p.allowSkipSteps;
+    this.requireSteps = p.requireSteps;
+    this.promptTips = p.promptTips;
+    this.planBuilds = p.planLargeBuilds;
+    this.progressPanel = p.progressPanel;
+    this.sameCodePrompt = p.sameCodePrompt;
+  }
+
+  /**
+   * The system prompt that writes code. In a study both conditions use the same one (the proposal's "same AI
+   * model and prompts for writing code"), so they differ only in the steps around the code.
+   */
+  private codeSystem(): string {
+    return P.actionSystem(this.sameCodePrompt ? "guided" : this.level, WHERE);
+  }
+
+  /** Stops this session recording anything more, and waits for what is already on its way to the log. */
+  async silence() {
+    this.logger.disable();
+    await this.logger.flush();
+  }
+
+  /** The participant signed out (or the researcher set the browser up for the next person). */
+  signOut() {
+    this.logger.log("study_step", undefined, { kind: "signed_out", stage: this.view.stage });
+  }
+
+  /** Opens the conversation with the tutor's greeting for the current condition. */
+  private async enterChat() {
+    this.view.stage = "chat";
     if (this.level === "off") {
       this.say("tutor", "Hi! I can see your whole project. Ask me to build something, change or fix code, or explain how something works.");
     } else if (this.level === "guided") {
@@ -228,9 +340,65 @@ export class VibeSession {
     await this.touchNow();
   }
 
+  // ================================================================== study plan
+
+  /** Every event logged from here on belongs to this part and question. */
+  private stampTask() {
+    const s = this.study;
+    this.logger.task = s && s.prog.part < s.parts.length ? `part${s.prog.part + 1}${s.prog.step === "work" ? `:q${s.prog.task + 1}` : `:${s.prog.step}`}` : undefined;
+  }
+
+  /** Moving through the study plan: past a quiz link, between questions, and on to the next part. */
+  private async studyAction(cmd: string) {
+    const s = this.study;
+    if (!s || this.view.busy || this.restart || s.prog.part >= s.parts.length) return;
+    const { prog } = s;
+    const part = s.parts[prog.part];
+    const save = () => { writeProgress(s.code, prog); this.stampTask(); };
+    const nextPart = () => {
+      Object.assign(prog, { part: prog.part + 1, step: "pre", task: 0, started: undefined });
+      save();
+      this.restart = true;
+    };
+    const shown = () => this.logger.log("study_step", undefined, { kind: "question_shown", part: prog.part + 1, question: prog.task + 1, text: part.tasks[prog.task] });
+
+    if (cmd === "studyContinue" && this.view.stage === "survey") {
+      this.logger.log("study_step", undefined, { kind: `${prog.step}_quiz_done`, part: prog.part + 1 });
+      if (prog.step === "post") return nextPart();
+      prog.step = "work";
+      prog.started = Date.now();
+      save();
+      shown();
+      return this.enterChat();
+    }
+    if (this.view.stage !== "chat") return;
+    if ((cmd === "studyNext" && prog.task < part.tasks.length - 1) || (cmd === "studyPrev" && prog.task > 0)) {
+      // A "Next question" button left in the conversation belongs to the question it was offered on.
+      this.view.messages.forEach((m) => { if (m.buttons?.some((b) => b.cmd === "studyNext")) m.buttons = undefined; });
+      prog.task += cmd === "studyNext" ? 1 : -1;
+      save();
+      shown();
+      return this.refresh();
+    }
+    if (cmd === "studyFinish") {
+      this.logger.log("study_step", undefined, {
+        kind: "part_finished", part: prog.part + 1, concept: part.concept, level: this.level, onQuestion: prog.task + 1, of: part.tasks.length,
+        seconds: prog.started ? Math.round((Date.now() - prog.started) / 1000) : undefined, suggestedMinutes: part.minutes || undefined,
+        overTime: prog.started && part.minutes ? Date.now() - prog.started > part.minutes * 60_000 : undefined,
+      });
+      if (!part.postUrl) return nextPart();
+      prog.step = "post";
+      save();
+      this.view.stage = "survey";
+      this.logger.log("study_step", undefined, { kind: "post_quiz_shown", part: prog.part + 1, concept: part.concept });
+      return this.refresh();
+    }
+  }
+
   // ================================================================== chat
 
-  async send(raw: string, target?: string) {
+  /** `source` is how the request was made: typed by the participant, or sent by an Explain button. */
+  async send(raw: string, target?: string, source: "typed" | "explain_error" | "explain_selection" = "typed") {
     if (target !== undefined) this.setTarget(target);
     const text = raw.trim();
     if (!text || this.view.busy || this.view.stage !== "chat" || this.quiz) return;
@@ -239,6 +407,7 @@ export class VibeSession {
     if (this.awaiting?.kind === "gate") return this.guard(() => this.handleGate(text));
 
     const snapshot = { msgs: this.view.messages.length, hist: this.history.length, round: this.clarRound };
+    this.view.draft = undefined;
     this.setBusy(true, "Reading your project…");
     let ctx: ProjectContext;
     try {
@@ -252,9 +421,12 @@ export class VibeSession {
     }
     const selNote = ctx.selection ? `\n\n_(about ${ctx.selection.path}, lines ${ctx.selection.startLine}–${ctx.selection.endLine})_` : "";
     const studentMsg = this.say("student", text + selNote);
+    const challenge = this.openChallenge();
     this.logger.log("vibe_request", undefined, {
       text, active: ctx.active, selection: ctx.selection && { path: ctx.selection.path, start: ctx.selection.startLine, end: ctx.selection.endLine },
-      files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour,
+      files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour, source,
+      // Asking the AI to make the change is one way to do a Modify challenge: part of a required step, not an extra request.
+      duringChallenge: challenge || undefined,
     });
 
     try {
@@ -265,11 +437,11 @@ export class VibeSession {
           P.ROUTER_SYSTEM, P.routerPrompt(listing, text, this.clarRound + 1, this.maxClarifications, this.plan ? P.planText(this.plan, undefined, false) : undefined),
           (v) => typeof v.detail === "string", this.recentHistory()
         );
-        this.logger.log("vibe_route", undefined, { intent: route?.intent, size: route?.size, logic: route?.logic, detail: route?.detail, reply: route?.reply, promptReview: route?.prompt_review, round: this.clarRound });
+        this.logger.log("vibe_route", undefined, { intent: route?.intent, size: route?.size, logic: route?.logic, detail: route?.detail, reply: route?.reply, promptReview: route?.prompt_review, round: this.clarRound, failed: !route || undefined });
 
         // Prompt coach: feedback on the request as a vibe-coding prompt.
         const pr = route?.prompt_review;
-        if (pr && ["build", "edit", "debug"].includes(route!.intent) && typeof pr.tip === "string" && pr.tip.trim()) {
+        if (this.promptTips && pr && ["build", "edit", "debug"].includes(route!.intent) && typeof pr.tip === "string" && pr.tip.trim()) {
           const score = [pr.goal, pr.io, pr.details].reduce((a: number, n: any) => a + clamp(Number(n) || 0, 0, 2), 0);
           studentMsg.tip = { text: stripThinking(pr.tip), improved: pr.improved ? stripThinking(String(pr.improved)) : undefined, score };
           this.stats.prompts.push(score);
@@ -285,12 +457,21 @@ export class VibeSession {
         }
         this.clarRound = 0;
 
-        if (route?.intent === "build" && route.size === "large") {
+        if (this.planBuilds && route?.intent === "build" && route.size === "large") {
           const planned = await this.makePlan(text, ctx);
           if (planned) return this.refresh();
         }
         // Structured vibe coding: requests that need programming logic start with Step 1 (explain the idea).
-        const needsLogic = route ? ["build", "edit", "debug"].includes(route.intent) && route.logic !== false : false;
+        // If the check itself failed, don't quietly drop the structure: anything that isn't plainly a question gets Step 1.
+        const needsLogic = route ? ["build", "edit", "debug"].includes(route.intent) && route.logic !== false : !looksLikeQuestion(text);
+        // During a Modify challenge, asking the AI to make the change is one way to do it (not a new program with
+        // its own three steps), and a question about the code is answered without touching the student's work.
+        if (challenge) {
+          const wantsChange = route ? ["build", "edit", "debug"].includes(route.intent) : !looksLikeQuestion(text);
+          this.clarRound = 0;
+          await this.act(text, ctx, { answerOnly: !wantsChange });
+          return this.refresh();
+        }
         if (this.level === "guided" && needsLogic) {
           await this.startGate(text, { structured: true });
           return this.refresh();
@@ -302,7 +483,7 @@ export class VibeSession {
       this.view.messages.length = snapshot.msgs;
       this.history.length = snapshot.hist;
       this.clarRound = snapshot.round;
-      this.view.draft = text;
+      this.view.draft = { id: Date.now(), text };
       this.setBusy(false);
       this.logger.log("vibe_error", undefined, { message: String(err?.message || err) });
       this.say("system", `⚠️ ${err?.message || err}\n\nYour message was not lost — press Send to try again.`);
@@ -320,15 +501,26 @@ export class VibeSession {
     this.setBusy(true, opts.planStep !== undefined ? `Building step ${opts.planStep + 1}…` : "Working on it…");
     const pText = this.plan && opts.planStep !== undefined ? P.planText(this.plan, opts.planStep, !!opts.planAll) : undefined;
     const res = await callBackend({
-      model: this.model, system: P.actionSystem(this.level, WHERE),
-      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join("\n\n"), pText, student?.idea, student?.steps),
+      model: this.model, system: this.codeSystem(),
+      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join("\n\n"), pText, student?.idea, student?.steps,
+        P.challengeNote(this.challenges())),
       history: this.recentHistory(), settings: this.cfg,
     });
     this.setBusy(false);
 
     let { blocks, rest } = parseBlocks(stripThinking(res.text));
+    // A block that names no file goes to the one file its SEARCH text matches; otherwise it is left out of the reply.
+    const loose = await placeUnnamedBlocks(rest, async (b) => (opts.answerOnly ? undefined : this.fileMatching(b, ctx.paths)));
+    blocks.push(...loose.blocks);
+    rest = loose.rest;
+    // A question asked during a Modify challenge never changes code (the student's work on it is in that file).
+    const dropped = opts.answerOnly ? blocks.length + loose.unplaced : loose.unplaced;
+    if (opts.answerOnly) blocks = [];
+    const droppedNote = !dropped ? ""
+      : opts.answerOnly ? "\n\n_(I haven't changed your code: you asked a question.)_"
+      : "\n\n_(I wrote a code change but didn't say which file it was for, so I left it out. Ask again if you want it.)_";
     let usedFallback = false;
-    if (!blocks.length) {
+    if (!blocks.length && !opts.answerOnly) {
       // The model answered with plain fenced code instead of edit blocks: turn it into reviewable changes.
       let active = ctx.active && ctx.activeContent !== undefined ? { path: ctx.active, content: ctx.activeContent } : undefined;
       if (this.target === "new") active = undefined;
@@ -341,7 +533,7 @@ export class VibeSession {
       }
     }
     const split = P.splitConcepts(rest);
-    const shown = split.text;
+    const shown = (split.text + droppedNote).trim();
     const concepts = this.level === "off" ? [] : split.concepts;
     this.history.push({ role: "user", content: request }, { role: "assistant", content: shown.slice(0, 1500) });
 
@@ -353,6 +545,7 @@ export class VibeSession {
     this.logger.log("vibe_reply", undefined, {
       text: shown, concepts, blocks: blocks.length, fencedFallback: usedFallback, planStep: opts.planStep, raw: res.text.slice(0, 4000),
       changes: cards.map((c) => ({ id: c.id, path: c.path, status: c.status, added: c.added, removed: c.removed, isNew: c.isNew })),
+      answerOnly: opts.answerOnly || undefined, unnamedPlaced: loose.blocks.length || undefined, droppedBlocks: dropped || undefined,
     }, res.ms);
 
     const hint = cards.some((c) => c.status === "pending") && this.level === "guided" && opts.structured
@@ -376,6 +569,45 @@ export class VibeSession {
     if (opts.planStep !== undefined && this.plan && !cards.some((c) => c.status === "pending")) {
       this.plan.steps.forEach((s) => { if (s.status === "doing") s.status = "todo"; });
     }
+    // The challenge's buttons are scrolled out of sight by now: bring them back under the answer.
+    if (!cards.some((c) => c.status === "pending")) this.remindChallenge();
+  }
+
+  /** The one project file that a SEARCH text (from a block that names no file) matches, if exactly one does. */
+  private async fileMatching(b: { search: string; replace: string }, paths: string[]): Promise<string | undefined> {
+    const hits: string[] = [];
+    for (const p of paths.slice(0, 200)) {
+      const content = await this.ws.read(p);
+      if (content !== undefined && applyBlocks(content, [{ path: p, search: b.search, replace: b.replace }]).applied) hits.push(p);
+      if (hits.length > 1) return undefined;
+    }
+    return hits[0];
+  }
+
+  /** Every Modify challenge set so far (open, or done), oldest first: what the code-writing model is told about them. */
+  private challenges(): P.ChallengeLike[] {
+    return [...this.proposals.values()]
+      .filter((p) => p.challenge && (p.challenge.open || p.learn.challenge === "done"))
+      .map((p) => ({ path: p.path, task: p.challenge!.task, open: p.challenge!.open }));
+  }
+
+  /**
+   * Moves an open challenge's buttons (Hint, Check my work, Skip) down to a new message, after something else was
+   * said in between (a question answered, a change accepted), so the student can carry on without scrolling back.
+   */
+  private remindChallenge(lead = "Back to your Modify challenge:") {
+    const p = [...this.proposals.values()].reverse().find((x) => x.challenge?.open);
+    const c = p?.challenge;
+    if (!p || !c || this.view.messages[this.view.messages.length - 1]?.id === c.msgId) return;
+    const old = this.view.messages.find((m) => m.id === c.msgId);
+    const buttons = old?.buttons ?? [
+      { label: "Check my work", cmd: "challengeCheck", arg: p.id, primary: true },
+      { label: "Skip", cmd: "challengeSkip", arg: p.id },
+    ];
+    if (old) old.buttons = undefined;
+    const m = this.say("tutor", `🛠 ${lead} ${c.task}\n\nWhen \`${p.path}\` does that, press **Check my work**.`, buttons);
+    m.look = "challenge";
+    c.msgId = m.id;
   }
 
   private async makeProposals(blocks: EditBlock[], request: string, concepts: string[], opts: ActOpts, student?: { idea?: string; steps?: string }): Promise<VibeChange[]> {
@@ -593,6 +825,7 @@ export class VibeSession {
   // ================================================================== change actions
 
   async action(cmd: string, arg?: string) {
+    if (cmd.startsWith("study")) return this.studyAction(cmd);
     if (this.view.busy || this.view.stage !== "chat") return;
     const a = arg === undefined ? "" : String(arg);
     try {
@@ -712,8 +945,9 @@ export class VibeSession {
     this.stats.accepted++;
     if (reviewed) this.stats.reviewed++;
     p.concepts.forEach((c) => this.bumpSeen(c));
+    let forChallenge = false;
     for (const other of this.proposals.values()) {
-      if (other.challenge?.open && other.path === p.path) other.challenge.viaAi = true;
+      if (other.challenge?.open && other.path === p.path) forChallenge = other.challenge.viaAi = true;
     }
     if (this.plan && p.planStep !== undefined) {
       const from = p.planStep;
@@ -726,6 +960,7 @@ export class VibeSession {
     });
     await this.touchNow();
     if (!batch) await this.advance(id);
+    if (forChallenge) this.remindChallenge("Change applied. Now check it against your Modify challenge:");
   }
 
   private reject(id: string) {
@@ -738,6 +973,7 @@ export class VibeSession {
       this.plan.steps.forEach((s) => { if (s.status === "doing") s.status = "todo"; });
     }
     this.logger.log("vibe_change", undefined, { id, path: p.path, status: "rejected", toured: p.toured, viewedDiff: p.viewedDiff });
+    if (this.openChallenge(p.path)) this.remindChallenge();
   }
 
   // ================================================================== learning loop
@@ -758,11 +994,12 @@ export class VibeSession {
     }
   }
 
-  private async markStage(id: string, stage: Stage, status: StageStatus) {
+  /** `reason`: why a step couldn't be done ("na"), for the log. */
+  private async markStage(id: string, stage: Stage, status: StageStatus, reason?: string) {
     const p = this.proposals.get(id);
     if (!p) return;
     p.learn[stage] = status;
-    this.logger.log("vibe_learn", undefined, { kind: "stage", id, stage, status });
+    this.logger.log("vibe_learn", undefined, { kind: "stage", id, stage, status, reason });
     if (status !== "active") await this.advance(id);
   }
 
@@ -779,7 +1016,31 @@ export class VibeSession {
         return this.startStage(id, s);
       }
     }
-    if (p.card.status === "accepted") this.offerNextStep(p);
+    if (p.card.status !== "accepted") return;
+    if (this.level === "guided" && p.structured && p.planStep === undefined) this.wrapUp(p);
+    this.offerNextStep(p);
+  }
+
+  /**
+   * Structured mode leads the student through every step, so say when they're over and what comes next: in a study,
+   * the next question (or finishing the part, which stays the student's own decision on the bar above).
+   */
+  private wrapUp(p: Proposal) {
+    if (p.wrapped) return;
+    p.wrapped = true;
+    const s = this.study;
+    const part = s && s.prog.step === "work" ? s.parts[s.prog.part] : undefined;
+    let next = "Ask me for the next thing whenever you're ready.";
+    let buttons: MsgButton[] | undefined;
+    if (s && part) {
+      const last = s.prog.task >= part.tasks.length - 1;
+      next = last
+        ? `That was the last question of this part. When you're ready, press **Finish part ${s.prog.part + 1}** at the top. You can keep asking me about your program first.`
+        : "When you're ready, go on to the next question. You can keep asking me about your program first.";
+      if (!last) buttons = [{ label: "Next question ▶", cmd: "studyNext", primary: true }];
+    }
+    this.say("tutor", `✅ That's all three steps done for this program. ${next}`, buttons);
+    this.logger.log("vibe_learn", undefined, { kind: "steps_done", id: p.id, stages: { ...p.learn } });
   }
 
   private offerNextStep(p: Proposal) {
@@ -823,7 +1084,7 @@ export class VibeSession {
       .slice(0, 8);
     if (!stops.length) {
       this.say("system", "I couldn't prepare a walkthrough for that change.");
-      return this.markStage(p.id, "tour", "na");
+      return this.markStage(p.id, "tour", "na", "no usable walkthrough from the model");
     }
 
     this.tour = { id: p.id, stops, index: 0, pending };
@@ -874,7 +1135,7 @@ export class VibeSession {
   private async startPredict(p: Proposal) {
     const lang = langOf(p.path);
     const file = this.ws.abs(p.path);
-    if (!lang || !file) return this.markStage(p.id, "predict", "na");
+    if (!lang || !file) return this.markStage(p.id, "predict", "na", "not a Python or JavaScript file");
     const code = (await this.ws.read(p.path)) ?? "";
 
     this.setBusy(true, "Getting ready to run your program…");
@@ -884,26 +1145,26 @@ export class VibeSession {
       stdin = (r?.stdin ?? "").replace(/\\n/g, "\n");
       if (stdin && !stdin.endsWith("\n")) stdin += "\n";
     }
-    const run = await runFile(lang, file, stdin, this.runner);
+    const run = await runFile(lang, file, stdin, this.runTarget);
     this.setBusy(false);
 
     if (run.error) {
-      this.say("system", `I can't run it here: ${run.error}`);
-      return this.markStage(p.id, "predict", "na");
+      this.say("system", `I can't run your program here, so we'll skip predicting what it prints. (${run.error})`);
+      return this.markStage(p.id, "predict", "na", `can't run: ${run.error}`);
     }
     if (run.timedOut) {
       this.say("system", "Your program didn't finish within a few seconds (it may be waiting for input or looping forever), so I'll skip the prediction.");
-      return this.markStage(p.id, "predict", "na");
+      return this.markStage(p.id, "predict", "na", "timed out");
     }
     const out = run.stdout.replace(/\s+$/, "");
     const err = run.stderr.trim();
     if (!out && err) {
       this.reportCrash(p.path, err);
-      return this.markStage(p.id, "predict", "na");
+      return this.markStage(p.id, "predict", "na", "crashed");
     }
     if (!out) {
       this.say("system", `\`${p.path}\` doesn't print anything when it runs, so there's nothing to predict yet.`);
-      return this.markStage(p.id, "predict", "na");
+      return this.markStage(p.id, "predict", "na", "prints nothing");
     }
     const truth = out + (err ? `\n[error]\n${err}` : "");
     const inputNote = stdin.trim() ? `It will be given this input:\n\`\`\`\n${stdin.trimEnd()}\n\`\`\`\n` : "";
@@ -938,7 +1199,7 @@ export class VibeSession {
     }
     this.stats.predTotal++;
     if (correct) this.stats.predRight++;
-    this.logger.log("vibe_learn", undefined, { kind: "predict_answer", id: a.id, prediction: text, actual: a.truth, correct });
+    this.logger.log("vibe_learn", undefined, { kind: "predict_answer", id: a.id, prediction: text, actual: a.truth, correct, feedback });
     this.say("tutor", `${correct ? "✅" : "🔍"} ${feedback}\n\n**What it actually printed:**\n\`\`\`\n${a.truth}\n\`\`\``);
     await this.markStage(a.id, "predict", "done");
   }
@@ -964,14 +1225,14 @@ export class VibeSession {
     this.setBusy(false);
     if (!res) {
       this.say("system", "I couldn't build a question for that change.");
-      return this.markStage(p.id, "check", "na");
+      return this.markStage(p.id, "check", "na", "no usable question from the model");
     }
     this.setBusy(true, "Checking the question against your program…");
     const questions = await this.verifyQuestions(p, res.questions.slice(0, this.perChange));
     this.setBusy(false);
     if (!questions.length) {
       this.say("system", "I couldn't write a reliable question for that change, so I've skipped it.");
-      return this.markStage(p.id, "check", "na");
+      return this.markStage(p.id, "check", "na", "every question failed the run check");
     }
     p.learn.check = "active";
     this.startQuiz("change", questions, p.concepts, p.id);
@@ -1021,7 +1282,7 @@ export class VibeSession {
       if (!r.applied) return { reason: "edit did not match the file" };
       program = r.content;
     }
-    const run = await runProgram(lang, program, "", this.runner);
+    const run = await runProgram(lang, program, "", this.runTarget);
     if (run.error) return { reason: run.error };
     if (run.timedOut) return { reason: "timed out" };
     const output = run.stdout.trim();
@@ -1062,7 +1323,7 @@ export class VibeSession {
       if (!res && fallback) res = fallback;
     }
     this.setBusy(false);
-    if (!res) return this.markStage(p.id, "challenge", "na");
+    if (!res) return this.markStage(p.id, "challenge", "na", "no usable challenge from the model");
 
     const task = stripThinking(res.task);
     const msg = this.say("tutor",
@@ -1072,6 +1333,7 @@ export class VibeSession {
         { label: "Check my work", cmd: "challengeCheck", arg: p.id, primary: true },
         { label: "Skip", cmd: "challengeSkip", arg: p.id },
       ]);
+    msg.look = "challenge";
     p.challenge = { task, hint: stripThinking(String(res.hint ?? "")), criteria: String(res.criteria ?? ""), baseline: code, msgId: msg.id, viaAi: false, open: true, before: before.output, expected };
     p.learn.challenge = "active";
     this.stats.chGiven++;
@@ -1084,7 +1346,7 @@ export class VibeSession {
     const m = this.view.messages.find((x) => x.id === c.msgId);
     if (m?.buttons) m.buttons = m.buttons.filter((b) => b.cmd !== "challengeHint");
     this.say("tutor", `💡 ${c.hint || "Look at the part of the code that decides the result you want to change."}`);
-    this.logger.log("vibe_learn", undefined, { kind: "challenge_hint", id });
+    this.logger.log("vibe_learn", undefined, { kind: "challenge_hint", id, hint: c.hint });
   }
 
   private async challengeCheck(id: string) {
@@ -1120,7 +1382,7 @@ export class VibeSession {
       if (!feedback) feedback = done ? "Looks done!" : "Not quite yet.";
     }
     this.setBusy(false);
-    this.logger.log("vibe_learn", undefined, { kind: "challenge_check", id, done, decidedBy: runVerdict === undefined ? "model" : "run", output: ran?.output, expected: c.expected, via: c.viaAi ? "ai" : "self", code: now });
+    this.logger.log("vibe_learn", undefined, { kind: "challenge_check", id, done, decidedBy: runVerdict === undefined ? "model" : "run", output: ran?.output, expected: c.expected, via: c.viaAi ? "ai" : "self", code: now, feedback });
     this.say("tutor", `${done ? "🎉" : "🔍"} ${feedback}`);
     if (!done) return;
     c.open = false;
@@ -1202,7 +1464,9 @@ export class VibeSession {
       this.logger.log("vibe_quiz_response", undefined, { kind: q.kind, changeId: q.changeId, skippedAt: q.index });
       this.say("system", "Quiz skipped.");
     } else if (q.items.length > 1) {
-      this.say("tutor", `You got **${q.right} of ${q.items.length}**. ` + (q.right === q.items.length ? "Nice work!" : "Ask me about anything that didn't click."));
+      const m = this.say("tutor", `You got **${q.right} of ${q.items.length}**. ` + (q.right === q.items.length ? "Nice work!" : "Ask me about anything that didn't click."));
+      m.look = "score";
+      m.score = `${q.right}/${q.items.length}`;
     }
     if (q.kind === "change" && q.changeId) await this.markStage(q.changeId, "check", skipped ? "skipped" : "done");
   }
@@ -1236,7 +1500,13 @@ export class VibeSession {
     if (this.view.stage !== "chat" || !this.files.includes(rel) || (this.ed.path === rel && this.ed.mode !== "file")) return;
     await this.ws.write(rel, content);
     if (this.ed.mode === "file" && this.ed.path === rel) this.ed.content = content;
-    this.logger.log("vibe_learn", undefined, { kind: "student_edit", path: rel, chars: content.length });
+    // An edit made for a Modify challenge is a required step; any other edit is the participant's own initiative.
+    this.logger.log("vibe_learn", undefined, { kind: "student_edit", path: rel, chars: content.length, duringChallenge: this.openChallenge(rel) || undefined });
+  }
+
+  /** Is a Modify challenge waiting to be done (on this file, if one is named)? */
+  private openChallenge(rel?: string): boolean {
+    return [...this.proposals.values()].some((p) => p.challenge?.open && (rel === undefined || p.path === rel));
   }
 
   /** The student selected lines (or cleared the selection) in the editor. */
@@ -1303,7 +1573,7 @@ export class VibeSession {
       this.say("system", "Select some code in the editor first.");
       return this.refresh();
     }
-    await this.send("Explain what the selected code does and why it works this way.");
+    await this.send("Explain what the selected code does and why it works this way.", undefined, "explain_selection");
   }
 
   /** ▶ Run: runs the open file with the input the student typed (programs that read input need some). */
@@ -1320,7 +1590,7 @@ export class VibeSession {
       return;
     }
     this.setBusy(true, "Running…");
-    const run = await runFile(lang, file, input, this.runner);
+    const run = await runFile(lang, file, input, this.runTarget);
     this.setBusy(false);
     this.logger.log("program_run", undefined, { via: "panel", file: rel, stdin: input, stdout: run.stdout, stderr: run.stderr, timedOut: run.timedOut, error: run.error });
     if (run.error) { this.say("system", `I can't run it here: ${run.error}`); return; }
@@ -1334,16 +1604,17 @@ export class VibeSession {
     // Show the line that names the error (e.g. "ReferenceError: foo is not defined"), not the runtime's footer.
     const lines = err.trim().split("\n").map((l) => l.trim()).filter(Boolean);
     const last = lines.find((l) => /^\w*(Error|Exception)\b|^\w+Error:|Traceback/.test(l) && !/^Traceback/.test(l)) ?? lines.pop() ?? err;
-    this.say("tutor",
+    const m = this.say("tutor",
       `💥 \`${file}\` crashed:\n\`\`\`\n${last.slice(0, 300)}\n\`\`\`\nErrors are clues, not failures. Want me to explain what this one means?`,
-      this.level === "off" ? [] : [{ label: "Explain this error", cmd: "explainError", arg: String(idx), primary: true }]);
+      [{ label: "Explain this error", cmd: "explainError", arg: String(idx), primary: true }]);
+    m.look = "crash";
   }
 
   private async explainError(idx: number) {
     const e = this.errors[idx];
     if (!e) return;
     this.view.messages.forEach((m) => { if (m.buttons?.some((b) => b.cmd === "explainError" && b.arg === String(idx))) m.buttons = undefined; });
-    await this.send(`My program \`${e.path}\` crashed with this error:\n\`\`\`\n${e.err.slice(0, 1500)}\n\`\`\`\nWhat does this error mean and why does it happen? Then fix it.`);
+    await this.send(`My program \`${e.path}\` crashed with this error:\n\`\`\`\n${e.err.slice(0, 1500)}\n\`\`\`\nWhat does this error mean and why does it happen? Then fix it.`, undefined, "explain_error");
   }
 
   // ================================================================== target, project, level
@@ -1443,7 +1714,7 @@ export class VibeSession {
     this.setBusy(true, "Fixing up the edit…");
     const files = [...new Set(bad.map((b) => b.path))].map((p) => ({ path: p, content: contents.get(p) }));
     const res = await callBackend({
-      model: this.model, system: P.actionSystem(this.level, WHERE), prompt: P.repairPrompt(request, blocksToText(bad), files),
+      model: this.model, system: this.codeSystem(), prompt: P.repairPrompt(request, blocksToText(bad), files),
       temperature: 0, settings: this.cfg,
     });
     this.setBusy(false);
@@ -1497,8 +1768,10 @@ export class VibeSession {
       const p = attempt === 0 ? prompt : `${prompt}\n\nYour previous reply was not valid JSON in the required format. Reply with ONLY the JSON object.`;
       const res = await callBackend({ model: this.model, system, prompt: p, history, temperature, settings: this.cfg });
       const parsed = extractJson<T>(res.text);
-      if (parsed && valid(parsed)) return parsed;
-      this.logger.log("parse_failure", undefined, { attempt, raw: res.text.slice(0, 600) }, res.ms);
+      const call = CALL_NAME.get(system) ?? "other";
+      // Logged with its duration, so time spent waiting for the AI can be taken out of a participant's active time.
+      if (parsed && valid(parsed)) { this.logger.log("model_call", undefined, { call, attempt }, res.ms); return parsed; }
+      this.logger.log("parse_failure", undefined, { call, attempt, raw: res.text.slice(0, 600) }, res.ms);
     }
     return undefined;
   }
@@ -1515,6 +1788,12 @@ export class VibeSession {
   }
 
   private setBusy(busy: boolean, label = "") {
+    // One "vibe_wait" per stretch of waiting (model calls and program runs together), with how long it lasted.
+    if (busy) this.busySince ??= Date.now();
+    else if (this.busySince !== undefined) {
+      this.logger.log("vibe_wait", undefined, { ms: Date.now() - this.busySince });
+      this.busySince = undefined;
+    }
     this.view.busy = busy;
     this.view.busyLabel = label;
     this.refresh();
@@ -1526,6 +1805,17 @@ export class VibeSession {
     v.project = this.projectDir;
     v.target = this.target;
     v.levelLocked = v.logging;
+    // Participants aren't told which version they are using in each part, so a research session doesn't name the mode.
+    v.ui = { mode: !v.logging, progress: this.progressPanel };
+    const st = this.study;
+    v.study = !st ? undefined : st.prog.part >= st.parts.length
+      ? { part: st.parts.length, parts: st.parts.length, concept: "", step: "done", tasks: [], task: 0, minutes: 0, url: st.endUrl ? quizUrl(st.endUrl, st.code, 0, "end") : undefined }
+      : {
+        part: st.prog.part, parts: st.parts.length, concept: st.parts[st.prog.part].concept, step: st.prog.step,
+        tasks: st.parts[st.prog.part].tasks, task: st.prog.task, minutes: st.parts[st.prog.part].minutes, started: st.prog.started,
+        url: st.prog.step === "pre" ? quizUrl(st.parts[st.prog.part].preUrl, st.code, st.prog.part, "pre")
+          : st.prog.step === "post" ? quizUrl(st.parts[st.prog.part].postUrl, st.code, st.prog.part, "post") : undefined,
+      };
     v.level = this.level;
     v.placeholder =
       this.awaiting?.kind === "gate" && this.gate?.step === 1 ? "Step 1: explain the idea in a sentence or two…"
@@ -1573,7 +1863,6 @@ export class VibeSession {
       .sort((a, b) => b.seen + b.total - (a.seen + a.total));
     v.skills = this.level === "off" ? [] : this.skillRows();
     this.onChange({ view: v, editor: this.editorView() });
-    v.draft = undefined;
   }
 
   /** What the 1-2-3 bar shows: the gate step, or where the latest structured change is (walkthrough, or predict / question / modify). */
@@ -1647,6 +1936,11 @@ export class VibeSession {
       { label: "Modifying", value: frac(s.chDone, s.chGiven), detail: '"Your turn" challenges completed.' },
     ];
   }
+}
+
+/** A rough stand-in for the request check when the model's answer couldn't be read. */
+function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$|^\s*(why|what|how|when|where|which|who|explain|is|are|does|do|can you explain|could you explain)\b/i.test(text);
 }
 
 function parseLevel(l: string | undefined): Level {

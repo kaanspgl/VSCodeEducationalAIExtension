@@ -5,6 +5,12 @@
   "ollamaContextLength": 16384,
   "temperature": 0.2,
   "pythonPath": "",
+  "judge0Url": "",
+  "judge0Token": "",
+
+  "openrouter.model": "poolside/laguna-s-2.1:free",
+  "openrouterApiKey": "",
+  "lockSettings": false,
 
   "learning.level": "guided",
   "learning.requireSteps": false,
@@ -14,5 +20,10 @@
   "learning.maxClarifications": 2,
   "learning.questionsPerChange": 1,
   "learning.projectQuizQuestions": 3,
-  "context.maxChars": 24000
+  "learning.promptTips": true,
+  "learning.planLargeBuilds": true,
+  "context.maxChars": 24000,
+
+  "study.strictProtocol": true,
+  "study.sameCodePrompt": true
 }

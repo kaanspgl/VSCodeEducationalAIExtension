@@ -28,8 +28,6 @@
     "verbatimModuleSyntax": false,
     "isolatedModules": true,
     "noEmit": true,
-    // tests and scripts import .server modules by their .ts name, so Node can run them without a build
-    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true

@@ -70,6 +70,53 @@ test('sameResult: no numbers to compare leaves the decision to the model', () =>
   assert.equal(sameResult('Hello, Ada!', 'Hello, ADA!', 'Hello, Ada'), undefined);
 });
 
+// Seen in a real session: "add up only the even numbers from 0 to 100", where the solution keeps the label.
+const evensExpected = 'The sum of numbers from 0 to 100 is: 2550';
+
+test('sameResult: the exact expected output is done', () => {
+  assert.equal(sameResult(evensExpected, evensExpected, current), true);
+  assert.equal(sameResult(`${evensExpected}\n`, evensExpected, current), true);
+});
+
+test('sameResult: a reworded label with the right number is done', () => {
+  assert.equal(sameResult('Sum of the even numbers: 2550', evensExpected, current), true);
+  assert.equal(sameResult('The total of evens from 0 to 100 = 2550.', evensExpected, current), true);
+  assert.equal(sameResult('2550', evensExpected, current), true);
+});
+
+test('sameResult: a print left inside the loop (running totals ending in the right number) is not done', () => {
+  // total += i; print(...) inside "for i in range(0, 101, 2)": 51 lines, the last one says 2550.
+  const totals = [];
+  for (let i = 0, t = 0; i <= 100; i += 2) { t += i; totals.push(t); }
+  assert.equal(totals[totals.length - 1], 2550);
+  const labelled = totals.map(t => `The sum of numbers from 0 to 100 is: ${t}`).join('\n');
+  assert.equal(sameResult(labelled, evensExpected, current), false);
+  assert.equal(sameResult(totals.join('\n'), evensExpected, current), false);
+  // The same with the final print after the loop as well.
+  assert.equal(sameResult(`${labelled}\n${evensExpected}`, evensExpected, current), false);
+});
+
+test('sameResult: an unchanged program is not done', () => {
+  assert.equal(sameResult(current, evensExpected, current), false);
+  assert.equal(sameResult(`${current}\n`, evensExpected, current), false);
+});
+
+test('sameResult: the right numbers in a different shape leave the decision to the model', () => {
+  // Label split onto its own line: no extra numbers, but one line more.
+  assert.equal(sameResult('The sum of the even numbers is:\n2550', evensExpected, current), undefined);
+  // One line, as expected, but the label carries a number the solution doesn't print.
+  assert.equal(sameResult('The sum of numbers from 1 to 100 is: 2550', evensExpected, current), undefined);
+  // A line of the solution's output dropped.
+  assert.equal(sameResult('2550', 'Evens: 2550\nOdds: 2500', 'Evens: 5050\nOdds: 2500'), undefined);
+});
+
+test('sameResult: a multi-line result with reworded labels is done', () => {
+  const before = '0\n1\n2\n3\nThe total is: 6';
+  const expected = '0\n2\nThe total is: 2';
+  assert.equal(sameResult('0\n2\nTotal = 2', expected, before), true);
+  assert.equal(sameResult('0\n1\n2\n3\nThe total is: 2', expected, before), false);
+});
+
 test('choices that differ only in their reasoning both fit the real output', () => {
   const reasons = [
     'The loop would exclude 100 from the sum, so the total would be 4950 instead of 5050',

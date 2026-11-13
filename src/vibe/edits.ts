@@ -11,21 +11,60 @@
  */
 export type EditBlock = { path: string; search: string; replace: string };
 
-const BLOCK_RE = /<<<<<<< SEARCH[ \t]+(\S[^\n]*)\r?\n([\s\S]*?)\r?\n?=======\r?\n([\s\S]*?)\r?\n?>>>>>>> REPLACE/g;
+const BLOCK_RE = /<<<<<<< SEARCH(?:[ \t]+(\S[^\n]*))?[ \t]*\r?\n([\s\S]*?)\r?\n?=======\r?\n([\s\S]*?)\r?\n?>>>>>>> REPLACE/g;
 
 export function parseBlocks(text: string): { blocks: EditBlock[]; rest: string } {
   const blocks: EditBlock[] = [];
   const rest = text
-    .replace(BLOCK_RE, (_m, p: string, search: string, replace: string) => {
-      const path = normalizePath(p);
-      if (path) blocks.push({ path, search, replace });
-      return '';
+    .replace(BLOCK_RE, (whole, p: string | undefined, search: string, replace: string, at: number, all: string) => {
+      // Some models put the path on the line above (often with a fence in between) instead of after SEARCH.
+      const path = normalizePath(p ?? pathAbove(all.slice(0, at)) ?? '');
+      if (path) {
+        blocks.push({ path, search, replace });
+        return '';
+      }
+      // No path anywhere: hand a new file's code, without the markers, to the fenced-code fallback to name.
+      return search.trim() ? whole : replace;
     })
     // drop fences the model wrapped around now-removed blocks
     .replace(/```[a-zA-Z]*\s*```/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return { blocks, rest };
+}
+
+/**
+ * Blocks that change existing code without naming a file are left in the text by parseBlocks. `place` says which file
+ * one belongs to (e.g. the one file its SEARCH text matches), or nothing. Placed blocks are returned; every such block
+ * is taken out of the text either way, so a student never sees raw edit markup. `unplaced` counts the ones dropped.
+ */
+export async function placeUnnamedBlocks(
+  text: string,
+  place: (b: { search: string; replace: string }) => Promise<string | undefined>
+): Promise<{ blocks: EditBlock[]; rest: string; unplaced: number }> {
+  const blocks: EditBlock[] = [];
+  let rest = text;
+  let unplaced = 0;
+  for (const m of [...text.matchAll(BLOCK_RE)]) {
+    const [whole, , search, replace] = m;
+    const path = normalizePath((await place({ search, replace })) ?? '');
+    if (path) blocks.push({ path, search, replace });
+    else unplaced++;
+    rest = rest.replace(whole, '');
+  }
+  if (rest !== text) rest = rest.replace(/```[a-zA-Z]*\s*```/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { blocks, rest, unplaced };
+}
+
+/** A path alone on one of the two lines above a block: main.py, `main.py`, **main.py:**, or ```python main.py. */
+function pathAbove(before: string): string | undefined {
+  const lines = before.split('\n').map(l => l.trim()).filter(Boolean).slice(-2).reverse();
+  for (const line of lines) {
+    const m = /^(?:```\w*\s+)?[`*]*([\w./-]+\.\w+)[`*:]*$/.exec(line);
+    if (m) return m[1];
+    if (!/^```\w*$/.test(line)) return undefined; // only a fence opener may sit between the path and the block
+  }
+  return undefined;
 }
 
 const LANG_EXT: Record<string, string> = {
@@ -54,6 +93,7 @@ export function fencedToBlocks(
   const rest = text.replace(FENCE, (whole, lead: string, before: string, info: string, code: string) => {
     const lines = code.replace(/\n$/, '').split('\n');
     if (lines.length < 3) return whole; // small inline example, keep in the explanation
+    if (/^(?:<<<<<<< SEARCH|>>>>>>> REPLACE)/m.test(code)) return whole; // an edit block we couldn't read, never file content
 
     const infoTokens = info.trim().split(/\s+/).filter(Boolean);
     const lang = (infoTokens[0] || '').toLowerCase();

@@ -9,5 +9,7 @@ node_modules
 .DS_Store
 .claude/
 
-# REB documents: the quizzes and answer key must never reach this public repo (they sync through OneDrive instead)
-ethics-documents/
+# server deployment (deploy.sh): PM2 settings with the admin password, the last deployed commit, PM2 logs
+ecosystem.config.cjs
+.last_commit
+/logs/

@@ -6,7 +6,7 @@ import { extractJson, stripThinking } from '../study/prompts';
 import { interpreterFor, runFile, runProgram } from '../study/runner';
 import { buildContext, listFiles, numbered, ProjectContext, quickInfo } from './context';
 import { matchChoices, onlyWordingChanged, sameResult } from './checks';
-import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, locateLines, parseBlocks } from './edits';
+import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, locateLines, parseBlocks, placeUnnamedBlocks } from './edits';
 import { ProposedContent } from './proposed';
 import * as P from './prompts';
 
@@ -89,6 +89,8 @@ type Proposal = {
   learn: Record<Stage, StageStatus>;
   challenge?: { task: string; hint: string; criteria: string; baseline: string; msgId: number; viaAi: boolean; open: boolean; before?: string; expected?: string };
   nextPrompted?: boolean;
+  /** The "all three steps done" message has been shown. */
+  wrapped?: boolean;
 };
 
 type Plan = {
@@ -97,7 +99,8 @@ type Plan = {
   request: string;
 };
 
-type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean };
+/** `answerOnly`: a question asked during a Modify challenge, answered without changing any code. */
+type ActOpts = { planStep?: number; planAll?: boolean; structured?: boolean; answerOnly?: boolean };
 
 /** Before any code is written: explain the idea (and, with requireSteps, write the steps). */
 type Gate = {
@@ -272,9 +275,12 @@ export class VibeSession {
     }
     const selNote = ctx.selection ? `\n\n_(about ${ctx.selection.path}, lines ${ctx.selection.startLine}–${ctx.selection.endLine})_` : '';
     const studentMsg = this.say('student', text + selNote);
+    const challenge = this.openChallenge();
     this.logger.log('vibe_request', undefined, {
       text, active: ctx.active, selection: ctx.selection && { path: ctx.selection.path, start: ctx.selection.startLine, end: ctx.selection.endLine },
       files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour,
+      // Asking the AI to make the change is one way to do a Modify challenge: part of a required step, not an extra request.
+      duringChallenge: challenge || undefined,
     });
 
     try {
@@ -311,6 +317,14 @@ export class VibeSession {
         }
         // Structured vibe coding: requests that need programming logic start with Step 1 (explain the idea).
         const needsLogic = route ? ['build', 'edit', 'debug'].includes(route.intent) && route.logic !== false : false;
+        // During a Modify challenge, asking the AI to make the change is one way to do it (not a new program with
+        // its own three steps), and a question about the code is answered without touching the student's work.
+        if (challenge) {
+          const wantsChange = route ? ['build', 'edit', 'debug'].includes(route.intent) : !/\?\s*$|^\s*(why|what|how|explain)\b/i.test(text);
+          this.clarRound = 0;
+          await this.act(text, ctx, { answerOnly: !wantsChange });
+          return this.refresh();
+        }
         if (this.level === 'guided' && needsLogic) {
           await this.startGate(text, { structured: true });
           return this.refresh();
@@ -341,14 +355,25 @@ export class VibeSession {
     const pText = this.plan && opts.planStep !== undefined ? P.planText(this.plan, opts.planStep, !!opts.planAll) : undefined;
     const res = await callBackend({
       model: this.model, system: P.actionSystem(this.level),
-      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join('\n\n'), pText, student?.idea, student?.steps),
+      prompt: P.actionPrompt(ctx.text, [request, P.targetInstruction(this.target, this.projectDir)].filter(Boolean).join('\n\n'), pText, student?.idea, student?.steps,
+        P.challengeNote(this.challenges())),
       history: this.recentHistory(), context: this.context,
     });
     this.setBusy(false);
 
     let { blocks, rest } = parseBlocks(stripThinking(res.text));
+    // A block that names no file goes to the one file its SEARCH text matches; otherwise it is left out of the reply.
+    const loose = await placeUnnamedBlocks(rest, async b => (opts.answerOnly ? undefined : this.fileMatching(b, ctx.paths)));
+    blocks.push(...loose.blocks);
+    rest = loose.rest;
+    // A question asked during a Modify challenge never changes code (the student's work on it is in that file).
+    const dropped = opts.answerOnly ? blocks.length + loose.unplaced : loose.unplaced;
+    if (opts.answerOnly) blocks = [];
+    const droppedNote = !dropped ? ''
+      : opts.answerOnly ? '\n\n_(I haven\'t changed your code: you asked a question.)_'
+      : '\n\n_(I wrote a code change but didn\'t say which file it was for, so I left it out. Ask again if you want it.)_';
     let usedFallback = false;
-    if (!blocks.length && ctx.folder) {
+    if (!blocks.length && !opts.answerOnly && ctx.folder) {
       // The model answered with plain fenced code instead of edit blocks: turn it into reviewable changes.
       let active = ctx.active && ctx.activeContent !== undefined ? { path: ctx.active, content: ctx.activeContent } : undefined;
       if (this.target === 'new') active = undefined;
@@ -361,7 +386,7 @@ export class VibeSession {
       }
     }
     const split = P.splitConcepts(rest);
-    const shown = split.text;
+    const shown = (split.text + droppedNote).trim();
     const concepts = this.level === 'off' ? [] : split.concepts;
     this.history.push({ role: 'user', content: request }, { role: 'assistant', content: shown.slice(0, 1500) });
 
@@ -373,6 +398,7 @@ export class VibeSession {
     this.logger.log('vibe_reply', undefined, {
       text: shown, concepts, blocks: blocks.length, fencedFallback: usedFallback, planStep: opts.planStep, raw: res.text.slice(0, 4000),
       changes: cards.map(c => ({ id: c.id, path: c.path, status: c.status, added: c.added, removed: c.removed, isNew: c.isNew })),
+      answerOnly: opts.answerOnly || undefined, unnamedPlaced: loose.blocks.length || undefined, droppedBlocks: dropped || undefined,
     }, res.ms);
 
     const hint = cards.some(c => c.status === 'pending') && this.level === 'guided' && opts.structured
@@ -396,6 +422,8 @@ export class VibeSession {
     if (opts.planStep !== undefined && this.plan && !cards.some(c => c.status === 'pending')) {
       this.plan.steps.forEach(s => { if (s.status === 'doing') s.status = 'todo'; });
     }
+    // The challenge's buttons are scrolled out of sight by now: bring them back under the answer.
+    if (!cards.some(c => c.status === 'pending')) this.remindChallenge();
 
   }
 
@@ -761,8 +789,9 @@ export class VibeSession {
     this.stats.accepted++;
     if (reviewed) this.stats.reviewed++;
     p.concepts.forEach(c => this.bumpSeen(c));
+    let forChallenge = false;
     for (const other of this.proposals.values()) {
-      if (other.challenge?.open && other.path === p.path) other.challenge.viaAi = true;
+      if (other.challenge?.open && other.path === p.path) forChallenge = other.challenge.viaAi = true;
     }
     if (this.plan && p.planStep !== undefined) {
       const from = p.planStep;
@@ -775,6 +804,7 @@ export class VibeSession {
     });
     void this.touchNow();
     if (!batch) await this.advance(id);
+    if (forChallenge) this.remindChallenge('Change applied. Now check it against your Modify challenge:');
   }
 
   private reject(id: string) {
@@ -786,6 +816,7 @@ export class VibeSession {
       this.plan.steps.forEach(s => { if (s.status === 'doing') s.status = 'todo'; });
     }
     this.logger.log('vibe_change', undefined, { id, path: p.path, status: 'rejected', toured: p.toured, viewedDiff: p.viewedDiff });
+    if (this.openChallenge(p.path)) this.remindChallenge();
   }
 
   // ================================================================== learning loop
@@ -806,11 +837,12 @@ export class VibeSession {
     }
   }
 
-  private async markStage(id: string, stage: Stage, status: StageStatus) {
+  /** `reason`: why a step couldn't be done ('na'), for the log. */
+  private async markStage(id: string, stage: Stage, status: StageStatus, reason?: string) {
     const p = this.proposals.get(id);
     if (!p) return;
     p.learn[stage] = status;
-    this.logger.log('vibe_learn', undefined, { kind: 'stage', id, stage, status });
+    this.logger.log('vibe_learn', undefined, { kind: 'stage', id, stage, status, reason });
     if (status !== 'active') await this.advance(id);
   }
 
@@ -827,7 +859,58 @@ export class VibeSession {
         return this.startStage(id, s);
       }
     }
-    if (p.card.status === 'accepted') this.offerNextStep(p);
+    if (p.card.status !== 'accepted') return;
+    if (this.level === 'guided' && p.structured && p.planStep === undefined) this.wrapUp(p);
+    this.offerNextStep(p);
+  }
+
+  /** Structured mode leads the student through every step, so say when they're over. */
+  private wrapUp(p: Proposal) {
+    if (p.wrapped) return;
+    p.wrapped = true;
+    this.say('tutor', '✅ That\'s all three steps done for this program. Ask me for the next thing whenever you\'re ready.');
+    this.logger.log('vibe_learn', undefined, { kind: 'steps_done', id: p.id, stages: { ...p.learn } });
+  }
+
+  /** Is a Modify challenge waiting to be done (on this file, if one is named)? */
+  private openChallenge(rel?: string): boolean {
+    return [...this.proposals.values()].some(p => p.challenge?.open && (rel === undefined || p.path === rel));
+  }
+
+  /** Every Modify challenge set so far (open, or done), oldest first: what the code-writing model is told about them. */
+  private challenges(): P.ChallengeLike[] {
+    return [...this.proposals.values()]
+      .filter(p => p.challenge && (p.challenge.open || p.learn.challenge === 'done'))
+      .map(p => ({ path: p.path, task: p.challenge!.task, open: p.challenge!.open }));
+  }
+
+  /**
+   * Moves an open challenge's buttons (Hint, Check my work, Skip) down to a new message, after something else was
+   * said in between (a question answered, a change accepted), so the student can carry on without scrolling back.
+   */
+  private remindChallenge(lead = 'Back to your Modify challenge:') {
+    const p = [...this.proposals.values()].reverse().find(x => x.challenge?.open);
+    const c = p?.challenge;
+    if (!p || !c || this.view.messages[this.view.messages.length - 1]?.id === c.msgId) return;
+    const old = this.view.messages.find(m => m.id === c.msgId);
+    const buttons = old?.buttons ?? [
+      { label: 'Check my work', cmd: 'challengeCheck', arg: p.id, primary: true },
+      { label: 'Skip', cmd: 'challengeSkip', arg: p.id },
+    ];
+    if (old) old.buttons = undefined;
+    const m = this.say('tutor', `🛠 ${lead} ${c.task}\n\nWhen \`${p.path}\` does that, press **Check my work**.`, buttons);
+    c.msgId = m.id;
+  }
+
+  /** The one project file that a SEARCH text (from a block that names no file) matches, if exactly one does. */
+  private async fileMatching(b: { search: string; replace: string }, paths: string[]): Promise<string | undefined> {
+    const hits: string[] = [];
+    for (const rel of paths.slice(0, 200)) {
+      const content = await readCurrent(this.fileUri(rel));
+      if (content !== undefined && applyBlocks(content, [{ path: rel, search: b.search, replace: b.replace }]).applied) hits.push(rel);
+      if (hits.length > 1) return undefined;
+    }
+    return hits[0];
   }
 
   private offerNextStep(p: Proposal) {
@@ -871,7 +954,7 @@ export class VibeSession {
       .slice(0, 8);
     if (!stops.length) {
       this.say('system', 'I couldn\'t prepare a walkthrough for that change.');
-      return this.markStage(p.id, 'tour', 'na');
+      return this.markStage(p.id, 'tour', 'na', 'no usable walkthrough from the model');
     }
 
     const uri = pending ? ProposedContent.put(`${p.id}-tour`, path.posix.basename(p.path), content) : this.fileUri(p.path);
@@ -942,7 +1025,7 @@ export class VibeSession {
   // ---- 2. Predict, then run (the program really runs; its output is the ground truth)
   private async startPredict(p: Proposal) {
     const lang = p.path.endsWith('.py') ? 'python' : p.path.endsWith('.js') ? 'javascript' : undefined;
-    if (!lang) return this.markStage(p.id, 'predict', 'na');
+    if (!lang) return this.markStage(p.id, 'predict', 'na', 'not a Python or JavaScript file');
     const uri = this.fileUri(p.path);
     const code = (await readCurrent(uri)) ?? '';
 
@@ -957,22 +1040,22 @@ export class VibeSession {
     this.setBusy(false);
 
     if (run.error) {
-      this.say('system', `I can't run it here: ${run.error}`);
-      return this.markStage(p.id, 'predict', 'na');
+      this.say('system', `I can't run your program here, so we'll skip predicting what it prints. (${run.error})`);
+      return this.markStage(p.id, 'predict', 'na', `can't run: ${run.error}`);
     }
     if (run.timedOut) {
       this.say('system', 'Your program didn\'t finish within a few seconds (it may be waiting for input or looping forever), so I\'ll skip the prediction.');
-      return this.markStage(p.id, 'predict', 'na');
+      return this.markStage(p.id, 'predict', 'na', 'timed out');
     }
     const out = run.stdout.replace(/\s+$/, '');
     const err = run.stderr.trim();
     if (!out && err) {
       this.reportCrash(p.path, err);
-      return this.markStage(p.id, 'predict', 'na');
+      return this.markStage(p.id, 'predict', 'na', 'crashed');
     }
     if (!out) {
       this.say('system', `\`${p.path}\` doesn't print anything when it runs, so there's nothing to predict yet.`);
-      return this.markStage(p.id, 'predict', 'na');
+      return this.markStage(p.id, 'predict', 'na', 'prints nothing');
     }
     const truth = out + (err ? `\n[error]\n${err}` : '');
     const inputNote = stdin.trim() ? `It will be given this input:\n\`\`\`\n${stdin.trimEnd()}\n\`\`\`\n` : '';
@@ -1007,7 +1090,7 @@ export class VibeSession {
     }
     this.stats.predTotal++;
     if (correct) this.stats.predRight++;
-    this.logger.log('vibe_learn', undefined, { kind: 'predict_answer', id: a.id, prediction: text, actual: a.truth, correct });
+    this.logger.log('vibe_learn', undefined, { kind: 'predict_answer', id: a.id, prediction: text, actual: a.truth, correct, feedback });
     this.say('tutor', `${correct ? '✅' : '🔍'} ${feedback}\n\n**What it actually printed:**\n\`\`\`\n${a.truth}\n\`\`\``);
     await this.markStage(a.id, 'predict', 'done');
   }
@@ -1033,14 +1116,14 @@ export class VibeSession {
     this.setBusy(false);
     if (!res) {
       this.say('system', 'I couldn\'t build a question for that change.');
-      return this.markStage(p.id, 'check', 'na');
+      return this.markStage(p.id, 'check', 'na', 'no usable question from the model');
     }
     this.setBusy(true, 'Checking the question against your program…');
     const questions = await this.verifyQuestions(p, res.questions.slice(0, this.perChange));
     this.setBusy(false);
     if (!questions.length) {
       this.say('system', 'I couldn\'t write a reliable question for that change, so I\'ve skipped it.');
-      return this.markStage(p.id, 'check', 'na');
+      return this.markStage(p.id, 'check', 'na', 'every question failed the run check');
     }
     p.learn.check = 'active';
     this.startQuiz('change', questions, p.concepts, p.id);
@@ -1131,7 +1214,7 @@ export class VibeSession {
       if (!res && fallback) res = fallback;
     }
     this.setBusy(false);
-    if (!res) return this.markStage(p.id, 'challenge', 'na');
+    if (!res) return this.markStage(p.id, 'challenge', 'na', 'no usable challenge from the model');
 
     const task = stripThinking(res.task);
     const msg = this.say('tutor',
@@ -1153,7 +1236,7 @@ export class VibeSession {
     const m = this.view.messages.find(x => x.id === c.msgId);
     if (m?.buttons) m.buttons = m.buttons.filter(b => b.cmd !== 'challengeHint');
     this.say('tutor', `💡 ${c.hint || 'Look at the part of the code that decides the result you want to change.'}`);
-    this.logger.log('vibe_learn', undefined, { kind: 'challenge_hint', id });
+    this.logger.log('vibe_learn', undefined, { kind: 'challenge_hint', id, hint: c.hint });
   }
 
   private async challengeCheck(id: string) {
@@ -1193,7 +1276,7 @@ export class VibeSession {
       if (!feedback) feedback = done ? 'Looks done!' : 'Not quite yet.';
     }
     this.setBusy(false);
-    this.logger.log('vibe_learn', undefined, { kind: 'challenge_check', id, done, decidedBy: runVerdict === undefined ? 'model' : 'run', output: ran?.output, expected: c.expected, via: c.viaAi ? 'ai' : 'self', code: now });
+    this.logger.log('vibe_learn', undefined, { kind: 'challenge_check', id, done, decidedBy: runVerdict === undefined ? 'model' : 'run', output: ran?.output, expected: c.expected, via: c.viaAi ? 'ai' : 'self', code: now, feedback });
     this.say('tutor', `${done ? '🎉' : '🔍'} ${feedback}`);
     if (!done) return;
     c.open = false;
