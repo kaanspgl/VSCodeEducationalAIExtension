@@ -8,7 +8,7 @@ Module._load = function (request, ...rest) {
   if (request === 'vscode') return { Uri: { from: (o) => o } };
   return load.call(this, request, ...rest);
 };
-const { parseBlocks, applyBlocks, fencedToBlocks, normalizePath } = require('../out/vibe/edits');
+const { parseBlocks, applyBlocks, fencedToBlocks, normalizePath, placeUnnamedBlocks } = require('../out/vibe/edits');
 Module._load = load;
 
 const FENCE = '```';
@@ -35,6 +35,46 @@ test('parseBlocks reads an empty SEARCH as a new file', () => {
   const { blocks } = parseBlocks('<<<<<<< SEARCH game.py\n=======\nprint("hi")\n>>>>>>> REPLACE');
   assert.equal(blocks[0].search, '');
   assert.equal(blocks[0].replace, 'print("hi")');
+});
+
+// The reply from the screenshot: a model that "fixes" a Modify challenge back, in a block that names no file.
+const UNNAMED = [
+  'Let me correct this.',
+  '',
+  '<<<<<<< SEARCH',
+  'for number in range(1, 101):',
+  '=======',
+  'for number in range(1, 51):',
+  '>>>>>>> REPLACE',
+  '',
+  'In plain terms: range stops before its second number.',
+].join('\n');
+
+test('placeUnnamedBlocks gives a block without a path to the file it matches, and takes the markup out', async () => {
+  const { rest: left } = parseBlocks(UNNAMED);
+  assert.match(left, /<<<<<<< SEARCH/); // parseBlocks can't place it on its own
+  const seen = [];
+  const r = await placeUnnamedBlocks(left, async (b) => { seen.push(b.search); return 'main.py'; });
+  assert.deepEqual(seen, ['for number in range(1, 101):']);
+  assert.deepEqual(r.blocks, [{ path: 'main.py', search: 'for number in range(1, 101):', replace: 'for number in range(1, 51):' }]);
+  assert.equal(r.unplaced, 0);
+  assert.doesNotMatch(r.rest, /SEARCH|REPLACE|=======/);
+  assert.match(r.rest, /^Let me correct this\.\n\nIn plain terms/);
+});
+
+test('placeUnnamedBlocks drops a block it cannot place, so raw edit markup is never shown', async () => {
+  const r = await placeUnnamedBlocks(`${'```python'}\n${UNNAMED}\n${'```'}`, async () => undefined);
+  assert.deepEqual(r.blocks, []);
+  assert.equal(r.unplaced, 1);
+  assert.doesNotMatch(r.rest, /SEARCH|REPLACE|=======|range\(1, 101\)/);
+});
+
+test('placeUnnamedBlocks leaves a reply without unnamed blocks as it is', async () => {
+  const text = 'Summary: just an answer.\n\n```python\nfor i in range(3):\n    print(i)\n```';
+  const r = await placeUnnamedBlocks(text, async () => 'main.py');
+  assert.equal(r.rest, text);
+  assert.equal(r.unplaced, 0);
+  assert.deepEqual(r.blocks, []);
 });
 
 test('normalizePath rejects paths that escape the workspace', () => {
@@ -101,6 +141,27 @@ test('fencedToBlocks replaces the active file when the code is a full rewrite of
   const code = 'function total(nums) {\n  let t = 0;\n  for (const n of nums) if (n > 0) t += n;\n  return t;\n}';
   const { blocks } = fencedToBlocks(`${FENCE}javascript\n${code}\n${FENCE}`, new Set(['main.js']), { path: 'main.js', content: current });
   assert.equal(blocks[0].path, 'main.js');
+});
+
+test('parseBlocks takes the path from the line above when SEARCH has none', () => {
+  const text = `Summary: a counter.\n\nmain.py\n${FENCE}python\n<<<<<<< SEARCH\n=======\nfor i in range(1, 6):\n    print(i)\n>>>>>>> REPLACE\n${FENCE}`;
+  const { blocks, rest } = parseBlocks(text);
+  assert.deepEqual(blocks, [{ path: 'main.py', search: '', replace: 'for i in range(1, 6):\n    print(i)' }]);
+  assert.equal(rest, 'Summary: a counter.\n\nmain.py');
+});
+
+test('a new-file block with no path anywhere becomes plain fenced code, never a file with markers', () => {
+  const text = `Summary: prints 1 to 5.\n${FENCE}python\n<<<<<<< SEARCH\n=======\n# Print numbers 1 to 5\nfor i in range(1, 6):\n    print(i)\n>>>>>>> REPLACE\n${FENCE}`;
+  const parsed = parseBlocks(text);
+  assert.equal(parsed.blocks.length, 0);
+  const { blocks } = fencedToBlocks(parsed.rest, new Set());
+  assert.deepEqual(blocks, [{ path: 'main.py', search: '', replace: '# Print numbers 1 to 5\nfor i in range(1, 6):\n    print(i)\n' }]);
+});
+
+test('fencedToBlocks never turns an unreadable edit block into file content', () => {
+  const text = `${FENCE}python\n<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE\n${FENCE}`;
+  assert.equal(parseBlocks(text).blocks.length, 0);
+  assert.equal(fencedToBlocks(parseBlocks(text).rest, new Set()).blocks.length, 0);
 });
 
 test('fencedToBlocks leaves short inline examples in the explanation', () => {

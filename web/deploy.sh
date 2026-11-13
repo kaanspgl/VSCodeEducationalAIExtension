@@ -58,7 +58,7 @@ fi
 # The admin pages need their password and programs need Judge0 before the site goes up; the model's API key can come later.
 node -e '
 const env = require("./ecosystem.config.cjs").apps?.[0]?.env ?? {};
-const missing = ["ADMIN_PASSWORD", "JUDGE0_URL", "JUDGE0_AUTH_TOKEN"].filter((k) => !env[k]);
+const missing = [["ADMIN_PASSWORD", "VL_ADMIN_PASSWORD"], ["JUDGE0_URL", "VL_JUDGE0_URL"], ["JUDGE0_AUTH_TOKEN", "VL_JUDGE0_TOKEN"]].filter((names) => !names.some((k) => env[k])).map((names) => names[0]);
 if (missing.length) { console.error("Fill in " + missing.join(", ") + " in ecosystem.config.cjs first (see DEPLOY.md)."); process.exit(1); }
 ' || exit 1
 if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 22) ? 0 : 1)' 2>/dev/null; then
@@ -142,7 +142,18 @@ if [ "$PULL_FROM_GITHUB" = true ]; then
     echo "$LATEST_COMMIT" > "$LAST_COMMIT_FILE"
 fi
 
-echo "Checking Judge0 (runs a Python and a JavaScript program)..."
-npm run -s check:runner -- --quick || echo "WARNING: Judge0 isn't working, so participants can't run programs. See DEPLOY.md, step 4."
+echo "Checking the app..."
+PORT=$(node -e 'process.stdout.write(String(require("./ecosystem.config.cjs").apps?.[0]?.env?.PORT ?? ""))')
+CODE=""
+for _ in $(seq 1 20); do
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/study")
+    [ "$CODE" = "200" ] && break
+    sleep 1
+done
+if [ "$CODE" = "200" ]; then
+    echo "VibeLearner answers on port $PORT. The researcher page's \"Running Python\" check runs a program on Judge0."
+else
+    echo "WARNING: VibeLearner doesn't answer on port $PORT yet. Check: pm2 logs $APP_NAME"
+fi
 
 echo "Deployment complete: $(date)"

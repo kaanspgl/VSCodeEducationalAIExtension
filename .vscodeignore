@@ -5,3 +5,5 @@
 **/*.map
 **/*.ts
 **/web/**
+**/deploy.sh
+**/ecosystem.config*.cjs

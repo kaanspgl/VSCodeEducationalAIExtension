@@ -11,6 +11,33 @@ import type { EditorView } from "~/lib/types";
 };
 loader.config({ monaco });
 
+// The page's paper and ink colours (app.css), so the editor doesn't look like a different app.
+monaco.editor.defineTheme("vl-light", {
+  base: "vs", inherit: true, rules: [],
+  colors: {
+    "editor.background": "#fefdfb", "editor.foreground": "#1a222b", "editorGutter.background": "#fefdfb",
+    "editorLineNumber.foreground": "#8a929a", "editorLineNumber.activeForeground": "#1a222b",
+    "editor.selectionBackground": "#b9e3ea", "editor.inactiveSelectionBackground": "#ceeff3",
+    "editorIndentGuide.background1": "#ece9e2", "editorWidget.border": "#dbd7cf",
+    "diffEditor.insertedTextBackground": "#3f8f5b33", "diffEditor.removedTextBackground": "#c2483b2e",
+  },
+});
+monaco.editor.defineTheme("vl-dark", {
+  base: "vs-dark", inherit: true, rules: [],
+  colors: {
+    "editor.background": "#1e2329", "editor.foreground": "#eae7e2", "editorGutter.background": "#1e2329",
+    "editorLineNumber.foreground": "#737b83", "editorLineNumber.activeForeground": "#eae7e2",
+    "editor.selectionBackground": "#1f5a63", "editor.inactiveSelectionBackground": "#143c42",
+    "editorIndentGuide.background1": "#272c32", "editorWidget.border": "#33393f",
+  },
+});
+
+/** Shared by the editor and the diff view: roomier lines and the page's monospace font. */
+const LOOK = {
+  fontSize: 14, lineHeight: 22, padding: { top: 12 }, lineDecorationsWidth: 12, minimap: { enabled: false }, automaticLayout: true,
+  fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+};
+
 type Props = {
   editor: EditorView;
   onSave: (path: string, content: string) => void;
@@ -18,12 +45,12 @@ type Props = {
 };
 
 export default function CodeEditor(props: Props) {
-  const theme = usePrefersDark() ? "vs-dark" : "vs";
+  const theme = usePrefersDark() ? "vl-dark" : "vl-light";
   const { editor } = props;
   if (editor.mode === "diff" && editor.diff) {
     return (
       <DiffEditor original={editor.diff.original} modified={editor.diff.modified} language={languageOf(editor.path)} theme={theme}
-        options={{ readOnly: true, originalEditable: false, renderSideBySide: true, automaticLayout: true, minimap: { enabled: false }, fontSize: 14 }} />
+        options={{ ...LOOK, readOnly: true, originalEditable: false, renderSideBySide: true }} />
     );
   }
   // A new editor whenever the server replaces the content (another file, a proposal, an accepted change),
@@ -88,7 +115,7 @@ function FileEditor({ editor, onSave, onSelect, theme }: Props & { theme: string
         window.clearTimeout(saveTimer.current);
         saveTimer.current = window.setTimeout(flush, 500);
       }}
-      options={{ readOnly: editor.readOnly, minimap: { enabled: false }, fontSize: 14, automaticLayout: true, scrollBeyondLastLine: false, renderLineHighlight: "none" }} />
+      options={{ ...LOOK, readOnly: editor.readOnly, scrollBeyondLastLine: false, renderLineHighlight: "none" }} />
   );
 }
 

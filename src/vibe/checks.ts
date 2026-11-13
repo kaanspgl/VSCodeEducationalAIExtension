@@ -5,20 +5,37 @@
 
 /**
  * Does `output` show the same result as `expected` (what the challenge's own solution prints)? Labels may be
- * worded differently; what must match are the numbers that changed from `before` (e.g. 5050 -> 2550).
- * Returns undefined when the result has no numbers to compare (then the model decides).
+ * worded differently, or dropped ("2550" for "The sum ... is: 2550"); what must match are the numbers that
+ * changed from `before` (e.g. 5050 -> 2550). Extra output is not the same result: the right number inside a
+ * running total printed on every pass of the loop does not count. So it is done only when the output has the
+ * changed numbers, no numbers the solution doesn't print, and as many non-empty lines as the solution.
+ * Returns false when a changed number is missing, or when there are both extra numbers and a different number
+ * of lines. Returns undefined when the run can't decide (then the model decides): no numbers changed, or the
+ * right numbers in a different shape (an extra number on the same lines, or lines split, added or dropped
+ * without new numbers).
  */
 export function sameResult(output: string, expected: string, before: string): boolean | undefined {
   if (output.trim() === expected.trim()) return true;
   if (output.trim() === before.trim()) return false;
   const tok = (x: string) => x.toLowerCase().replace(/["'`[\](),:;]|\.(?=\s|$)/g, ' ').split(/\s+/).filter(Boolean);
-  const isNum = (t: string) => /^-?\d+(\.\d+)?$/.test(t);
-  const beforeNums = new Map<string, number>();
-  tok(before).filter(isNum).forEach(n => beforeNums.set(n, (beforeNums.get(n) ?? 0) + 1));
-  const changed = tok(expected).filter(isNum).filter(n => { const k = beforeNums.get(n) ?? 0; if (k > 0) { beforeNums.set(n, k - 1); return false; } return true; });
+  const nums = (x: string) => tok(x).filter(t => /^-?\d+(\.\d+)?$/.test(t));
+  const lines = (x: string) => x.split('\n').filter(l => l.trim()).length;
+  const expNums = nums(expected);
+  const changed = withoutAll(expNums, nums(before));
   if (!changed.length) return undefined;
-  const out = tok(output);
-  return changed.every(n => out.includes(n));
+  const out = nums(output);
+  if (withoutAll(changed, out).length) return false;
+  const extra = withoutAll(out, expNums).length > 0;
+  const sameLines = lines(output) === lines(expected);
+  if (!extra) return sameLines ? true : undefined;
+  return sameLines ? undefined : false;
+}
+
+/** `xs` with one occurrence of each item of `remove` taken out (multiset difference). */
+function withoutAll(xs: string[], remove: string[]): string[] {
+  const left = new Map<string, number>();
+  remove.forEach(r => left.set(r, (left.get(r) ?? 0) + 1));
+  return xs.filter(x => { const k = left.get(x) ?? 0; if (k > 0) { left.set(x, k - 1); return false; } return true; });
 }
 
 /**

@@ -1,13 +1,10 @@
-import { requireStudent } from "~/.server/access";
-import { PARTS } from "~/.server/participants";
 import { sessionFor, subscribe } from "~/.server/sessions";
 import type { Route } from "./+types/api.events";
 
 /** Server-Sent Events: the session's full state, sent on connect and after every change. */
 export async function loader({ request }: Route.LoaderArgs) {
-  const p = requireStudent(request, "api");
-  if (p.part > PARTS) return new Response("Finished", { status: 409 });
-  const { key: sid, session } = await sessionFor(p);
+  const { sid, session, setCookie } = await sessionFor(request);
+  if (setCookie) return new Response("No session", { status: 401 });
 
   const enc = new TextEncoder();
   let cleanup = () => {};

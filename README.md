@@ -18,8 +18,8 @@ You need **Node.js 22.22 or newer** (check with `node -v`; the current LTS is fi
 `dev:mock` replaces the model with canned answers, so you can click through the whole flow without installing a model or getting an API key:
 
 ```bash
-git clone https://github.com/kaanspgl/VSCodeEducationalAIExtension.git
-cd VSCodeEducationalAIExtension/web
+git clone https://github.com/kaanspgl/vibelearner-web.git
+cd vibelearner-web/web
 npm install
 npm run dev:mock
 ```
@@ -68,7 +68,7 @@ Open the root folder in VS Code and press **F5** (or pick **Run VibeLearner Exte
 ### If something goes wrong
 
 * **`npm install` prints `EBADENGINE`, or the dev server won't start**: Node is too old. Install Node 22 (22.22+) or 24.
-* **"Python is not installed"** when running a Python program: on Windows the `python` command sometimes only opens the Microsoft Store. Install Python from python.org, or point `pythonPath` at it. On macOS/Linux it uses `python3`.
+* **"Python is not installed"** when running a Python program: on Windows the `python` command sometimes only opens the Microsoft Store. Install Python from python.org, or point `pythonPath` at it. On macOS/Linux it uses `python3`. The web version can also run programs on a Judge0 server instead (`judge0Url`, see web/README.md).
 * **Answers ignore half the code or get cut off** (Ollama): Ollama defaults to a 4096-token context and quietly drops the rest. Leave `ollamaContextLength` at 16384 or higher.
 * **Port 5173 is taken**: `npm run dev -- --port 5180`.
 
@@ -99,11 +99,12 @@ Step 3 in a bit more detail:
 |---|---|
 | Predict & run | The student predicts the output, then the program actually runs and the guess is compared with the real output. |
 | Questions | A "what would happen if…" question about the code (e.g. *what if the loop stopped before 100?*). |
-| Modify | A small change that practises the same logic (e.g. *add only the even numbers*), done by hand or by prompting the AI, then **Check my work**. |
+| Modify | A small change that practises the same logic (e.g. *add only the even numbers*), done by hand or by prompting the AI, then **Check my work**. While a challenge is open, the AI is told about it: a question is answered without changing any code, and asking the AI to make the change gets that change straight away (no new Step 1). |
 
 Local models are often confidently wrong, so VibeLearner runs the code instead of trusting what the model says:
 
 * The answer key of a "what if" question is checked by applying that change and running the program. A wrong key gets corrected, and a question whose answers don't fit the real output is dropped.
+* When all three steps are done, the tutor says so (in a study, with the way on to the next question).
 * Every Modify challenge is checked by running its solution. Challenges that wouldn't change the output (e.g. "start the sum at 1 instead of 0") or would only reword it (e.g. "print just the number, without the text") are rejected.
 * **Check my work** runs the student's program and compares its result with the challenge's solution, so wording differences don't matter and the feedback says what the program actually prints.
 
@@ -151,7 +152,7 @@ Extension settings live under `vibelearner.*` in VS Code. The web version reads 
 ## Research use
 
 * **Consent**: on the Start screen, a participant enters a code and ticks consent. Nothing is logged without both.
-* **What gets logged**: one JSONL file per participant, stored locally. Every event is tagged with the condition (`vibe:guided` = structured, `vibe:off` = regular). Events cover requests, prompt-quality scores, plans, every idea (and steps) answer with the AI's verdict (and whether it was passed unaided, scaffolded or skipped), walkthroughs, every proposed / accepted / rejected change (with content), whether the code was read (diff, walkthrough or prediction), predictions against the real output, question answers with how each answer key was checked (verified, corrected or dropped), and Modify outcomes (by hand or via the AI, and whether the run or the model decided). Time spent waiting for the model is recorded separately from student time.
+* **What gets logged**: one JSONL file per participant, stored locally. Every event is tagged with the condition (`vibe:guided` = structured, `vibe:off` = regular). Events cover requests, prompt-quality scores, plans, every idea (and steps) answer with the AI's verdict (and whether it was passed unaided, scaffolded or skipped), walkthroughs, every proposed / accepted / rejected change (with content), whether the code was read (diff, walkthrough or prediction), predictions against the real output, question answers with how each answer key was checked (verified, corrected or dropped), and Modify outcomes (by hand or via the AI, and whether the run or the model decided). A step that couldn't be done is logged with the reason (e.g. Python couldn't be run, so there was nothing to predict). Time spent waiting for the model is recorded separately from student time.
 * **Finding the logs**: run **VibeLearner: Reveal Study Logs**. The web version keeps them in `web/data/`.
 * **Before collecting data**: freeze the prompts (`src/vibe/prompts.ts`; `VIBE_PROMPT_VERSION` is written to the log), the model and the settings.
 * **Study workflow** (`vibelearner.workflow = study`): the older fixed-task workflow, kept for controlled studies. It has instructor-reviewed tasks with unit tests, a request check, code generation, review, a check (multiple-choice quiz, then predict-then-run), a post-task survey, and a direct-generation control condition.

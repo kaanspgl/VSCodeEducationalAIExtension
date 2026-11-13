@@ -6,7 +6,7 @@ data/
 # local settings (may hold API keys); copy vibelearner.config.example.json
 vibelearner.config.json
 .env
-# server deployment: PM2 config holds API keys (copy ecosystem.config.example.cjs); deploy.sh's state and PM2 logs
+# server deployment: PM2 config holds the admin password and keys (copy ecosystem.config.example.cjs); deploy.sh's state and PM2 logs
 ecosystem.config.cjs
 .last_commit
 logs/
