@@ -29,11 +29,11 @@ module.exports = {
                 // in with the code and PIN on their card instead. deploy.sh won't deploy without it.
                 ADMIN_PASSWORD: "",
 
-                // Model: UBC's EduAI. Until EDUAI_API_KEY is filled in, the site works but the tutor answers
-                // "EduAI API key missing." Empty values are ignored.
+                // Model: UBC's EduAI (campus models only). Until EDUAI_API_KEY is filled in, the site works but the
+                // tutor answers "EduAI API key missing." Create the key in EduAI: Settings, then API Keys. Empty values are ignored.
                 VL_PROVIDER: "eduai",       // or ollama | openai | gemini, with that provider's key below
-                VL_MODEL: "",               // the model name EduAI gives you, if any
                 EDUAI_API_KEY: "",
+                EDUAI_MODEL: "",            // empty: vllm:qwen3.8-27b-instruct (65,536-token window); or vllm:qwen3.5-9b-instruct / -2b- (16,384)
                 OPENAI_API_KEY: "",
                 OPENAI_BASE_URL: "",
                 GEMINI_API_KEY: "",
@@ -43,7 +43,7 @@ module.exports = {
                 JUDGE0_URL: "http://127.0.0.1:2358",
                 JUDGE0_AUTH_TOKEN: "",
 
-                // Everything else (EduAI's courseCode, the learning.* settings, ...) goes in
+                // Everything else (eduai.maxTokens, the learning.* settings, ...) goes in
                 // vibelearner.config.json, which is re-read at every session start, so no restart is needed.
             },
         },

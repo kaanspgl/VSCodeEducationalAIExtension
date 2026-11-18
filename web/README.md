@@ -21,21 +21,38 @@ Add `-- --port 5180` to either dev command if 5173 is taken.
 
 Copy `vibelearner.config.example.json` to `vibelearner.config.json`. Without it, the defaults are used (Ollama with `qwen3-coder:30b`). The keys are the same as the extension's settings, with or without the `vibelearner.` prefix, so you can paste in a settings.json. The file is re-read whenever a session starts.
 
-Providers: `ollama` (default), `openrouter` (set `openrouter.model`), `gemini` (set `gemini.model`), `openai` (any OpenAI-compatible server via `openaiBaseUrl`), `eduai`, and `mock`.
+Providers: `ollama` (default), `eduai` (UBC's campus models; set `eduai.model`), `openrouter` (set `openrouter.model`), `gemini` (set `gemini.model`), `openai` (any OpenAI-compatible server via `openaiBaseUrl`), and `mock`.
 
-The easiest way to switch is the **Model** section on the start screen: pick Ollama, OpenRouter or Gemini, choose a model and paste a key. It writes to `vibelearner.config.json` (git ignores it) and never sends a saved key back to the browser. The section only appears when you open the app on the machine running the server (`localhost`), never for participants on other machines (also not behind a reverse proxy such as Apache, where every request arrives as `localhost`), and never at `/study`. Set `"lockSettings": true` to turn it off completely on a study machine.
+The easiest way to switch is the **Model** section on the start screen: pick Ollama, EduAI, OpenRouter or Gemini, choose a model and paste a key. It writes to `vibelearner.config.json` (git ignores it) and never sends a saved key back to the browser. The section only appears when you open the app on the machine running the server (`localhost`), never for participants on other machines (also not behind a reverse proxy such as Apache, where every request arrives as `localhost`), and never at `/study`. Set `"lockSettings": true` to turn it off completely on a study machine.
 
 No money needed: OpenRouter's models ending in `:free` cost nothing (make a free account at openrouter.ai and create a key), but they have a daily request limit and the list changes, so the start screen shows the current ones. Google AI Studio keys have a free tier too.
 
 To show the app inside another site's page (a hosted preview, a demo in a frame), start it with `VL_EMBEDDED=1`: its cookies are then sent inside the frame, over HTTPS or localhost only. Never use that for a study; the researcher page flags it.
 
-Secrets and a few settings can come from environment variables instead (they win over the config file): `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EDUAI_API_KEY`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`, `VL_DATA_DIR`, `VL_CONFIG`.
+Secrets and a few settings can come from environment variables instead (they win over the config file): `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EDUAI_API_KEY`, `EDUAI_MODEL`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`, `VL_DATA_DIR`, `VL_CONFIG`.
+
+### EduAI
+
+The study uses UBC's EduAI (`app/.server/eduai.ts`): `POST https://my.eduai.ok.ubc.ca/api/completion` with the key in `x-api-key`. The key needs API access from an EduAI administrator; create it in EduAI under Settings, then API Keys (it's shown once). Only campus models work, and their names start with `vllm:`:
+
+| `eduai.model` | Context window | Notes |
+| --- | --- | --- |
+| `vllm:qwen3.8-27b-instruct` (default) | 65,536 tokens | Best answers; one server, shared with course chat, so it's slower when courses are busy |
+| `vllm:qwen3.5-9b-instruct` | 16,384 tokens | Faster; a whole project in the prompt may not fit |
+| `vllm:qwen3.5-2b-instruct` | 16,384 tokens | Fastest, weakest |
+
+What the app does about EduAI's limits:
+
+* **Context window.** The prompt plus `eduai.maxTokens` (default 4,096) must fit, and one token over is refused. Before sending, the app guesses the prompt's tokens (1 per 3 characters, plus 10% spare) and lowers `maxTokens` to fit. If fewer than 1,024 tokens would be left for the answer, it shows an error instead of sending.
+* **Two at a time.** EduAI runs at most 2 requests from all student keys together. This server sends at most `eduai.maxConcurrent` (default 2) at once and queues the rest. When EduAI answers busy (503) or rate-limited (429), the app waits for `Retry-After` and tries again, up to 4 attempts and 90 seconds of waiting in total. After that, the participant sees "busy, try again".
+* **Daily allowance.** Every participant uses the same key, and its limit is by default 200 requests and 200,000 tokens in any 24 hours. Each participant message makes a few requests, and each one carries the project's code, so this runs out after a few participants a day. Run a pilot session, check the use under "Your API access" in EduAI's Settings, then API Keys, and ask the EduAI administrator for a higher limit before the study starts. When the limit is used up, participants see a message that says so.
+* **Rules.** EduAI's terms say the key is for the purpose the access was given for and must not run a service that other people use. Make sure the administrator granted the access for this study. Participants' messages and code go to EduAI's servers (the prompts aren't stored there), so the ethics approval must cover that.
 
 ## Deploying on S378 (dev.sandbox.ok.ubc.ca)
 
 Apache already serves dev.sandbox.ok.ubc.ca over HTTPS and forwards it to `localhost:2025`. Leave its conf alone: it's Ansible managed and shared with other lab sites, so a deploy never restarts it. PM2 runs the app from `web/` with `web/ecosystem.config.cjs` (copy `ecosystem.config.example.cjs`; git ignores it because it holds the password). Participants' programs run on Judge0 in Docker: `web/judge0/`, set up once with `sudo ./setup.sh`.
 
-In `ecosystem.config.cjs`: `ADMIN_PASSWORD` (the researcher page), `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` (printed by `judge0/setup.sh`), the model (`VL_PROVIDER`, `EDUAI_API_KEY`), `PORT: 2025` and `HOST: 127.0.0.1`. The `VL_` names (`VL_ADMIN_PASSWORD`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`) work too. In `web/vibelearner.config.json`, set `"lockSettings": true`.
+In `ecosystem.config.cjs`: `ADMIN_PASSWORD` (the researcher page), `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` (printed by `judge0/setup.sh`), the model (`VL_PROVIDER: "eduai"`, `EDUAI_API_KEY`, and `EDUAI_MODEL` if not the default), `PORT: 2025` and `HOST: 127.0.0.1`. The `VL_` names (`VL_ADMIN_PASSWORD`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`) work too. In `web/vibelearner.config.json`, set `"lockSettings": true`.
 
 To update the site: `cd /srv/www/vibelearner/web && ./deploy.sh` (`--force` rebuilds without a new commit). It pulls the branch, runs `npm ci` and `npm run build`, restarts the app under PM2 and checks that it answers. A restart ends every open session (participants sign in again with their code and carry on), so don't deploy while someone is taking part.
 

@@ -74,6 +74,8 @@ export function studyFingerprint(cfg: Settings, parts: StudyPart[]): { hash: str
     model: choice.model,
     temperature: cfg.get("temperature") ?? null,
     ollamaContextLength: choice.provider === "ollama" ? cfg.get("ollamaContextLength") ?? null : null,
+    // Only with EduAI, so other providers' fingerprints stay as they were.
+    ...(choice.provider === "eduai" ? { maxTokens: Number(cfg.get("eduai.maxTokens")) || 4096 } : {}),
     // Where programs run decides which Python the predictions and checks are made against.
     runner: runTargetFor(cfg).judge0 ? "judge0" : "local",
     protocol: protocolFor(cfg, true),

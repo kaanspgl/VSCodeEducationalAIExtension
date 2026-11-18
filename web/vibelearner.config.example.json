@@ -8,6 +8,10 @@
   "judge0Url": "",
   "judge0Token": "",
 
+  "eduai.model": "vllm:qwen3.8-27b-instruct",
+  "eduai.maxTokens": 4096,
+  "eduaiApiKey": "",
+
   "openrouter.model": "poolside/laguna-s-2.1:free",
   "openrouterApiKey": "",
   "lockSettings": false,

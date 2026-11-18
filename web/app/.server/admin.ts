@@ -6,6 +6,7 @@ import { createCookie } from "react-router";
 import type { Level } from "~/lib/types";
 import { DATA_DIR, loadSettings } from "./config";
 import { readConsent } from "./consent";
+import { EDUAI_CONTEXT } from "./eduai";
 import { callBackend, modelChoice } from "./llm";
 import { safeName } from "./logger";
 import { protocolFor, readFreeze, studyFingerprint } from "./protocol";
@@ -467,8 +468,10 @@ export async function readiness(rows: ParticipantSummary[]): Promise<Check[]> {
   const { provider, model } = modelChoice(cfg);
   if (provider === "mock") add("AI model", "fail", "The mock model is on: it gives the same canned replies to everything. Never use it with participants.");
   else if (provider === "eduai") {
-    if (cfg.get<string>("eduaiApiKey")) add("AI model", "ok", `EduAI, model ${model}. Press “Test the model” before each day of sessions.`);
-    else add("AI model", "fail", "EduAI is selected but has no API key (set EDUAI_API_KEY or eduaiApiKey).");
+    const window = EDUAI_CONTEXT[model];
+    if (!cfg.get<string>("eduaiApiKey")) add("AI model", "fail", "EduAI is selected but has no API key (set EDUAI_API_KEY or eduaiApiKey).");
+    else if (!model.startsWith("vllm:")) add("AI model", "fail", `EduAI only runs campus models, whose names start with “vllm:”, not “${model}”. Set eduai.model (or EDUAI_MODEL).`);
+    else add("AI model", "ok", `EduAI on UBC's campus servers, model ${model}${window ? ` (${window.toLocaleString("en")}-token window)` : ""}. Every participant shares the key's daily allowance (by default 200 requests and 200,000 tokens in any 24 hours): check “Your API access” in EduAI's Settings, then API Keys, and press “Test the model” before each day of sessions.`);
   } else if (provider === "ollama") add("AI model", "ok", `Ollama at ${cfg.get("ollamaUrl")}, model ${model}: it runs on this server. Press “Test the model” before each day of sessions.`);
   else add("AI model", "warn", `${provider}, model ${model}: what participants type is sent to an outside provider. The proposal says the model runs on a UBC-managed computer and nothing goes to third-party AI providers.`);
 

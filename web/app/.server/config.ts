@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { EDUAI_DEFAULT_MODEL, EDUAI_ENDPOINT } from "./eduai";
 
 /**
  * Settings use the same keys as the VS Code extension's settings (with or without the "vibelearner." prefix),
@@ -20,9 +21,15 @@ const DEFAULTS: Record<string, unknown> = {
   "openrouter.model": "poolside/laguna-s-2.1:free",
   "gemini.apiKey": "",
   "gemini.model": "gemini-2.5-flash",
-  eduaiEndpoint: "https://eduai.ok.ubc.ca/api/chat",
+  // UBC EduAI's campus models (see eduai.ts). The key comes from EduAI's Settings, then API Keys.
+  eduaiEndpoint: EDUAI_ENDPOINT,
   eduaiApiKey: "",
-  courseCode: "DEMO101",
+  "eduai.model": EDUAI_DEFAULT_MODEL,
+  // The longest answer. Prompt + this must fit the model's window (it's lowered to fit), and a request that fails
+  // before the model reports is charged all of it against the key's daily tokens, so don't set it higher than needed.
+  "eduai.maxTokens": 4096,
+  // EduAI runs at most 2 requests from all student keys at once; more only get "busy" answers sooner.
+  "eduai.maxConcurrent": 2,
   pythonPath: "",
   // Run student programs on a Judge0 server (e.g. a self-hosted one at http://127.0.0.1:2358) instead of this machine.
   judge0Url: "",
@@ -61,6 +68,7 @@ const FROM_ENV: Record<string, string> = {
   OPENROUTER_API_KEY: "openrouterApiKey",
   GEMINI_API_KEY: "gemini.apiKey",
   EDUAI_API_KEY: "eduaiApiKey",
+  EDUAI_MODEL: "eduai.model",
 };
 
 export const DATA_DIR = path.resolve(process.env.VL_DATA_DIR || path.join(process.cwd(), "data"));

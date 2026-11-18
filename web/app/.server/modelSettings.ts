@@ -1,5 +1,6 @@
 import type { ModelSettings, ProviderInfo } from "~/lib/types";
 import { envOverride, loadSettings, saveSettings, type Settings } from "./config";
+import { EDUAI_CONTEXT } from "./eduai";
 import { modelChoice, modelKeyFor } from "./llm";
 
 /**
@@ -9,7 +10,9 @@ import { modelChoice, modelKeyFor } from "./llm";
  */
 const KEY_SETTING: Record<string, string> = { openrouter: "openrouterApiKey", gemini: "gemini.apiKey", openai: "openaiApiKey", eduai: "eduaiApiKey" };
 const LABELS: Record<string, string> = { ollama: "Ollama (on this computer)", openrouter: "OpenRouter", gemini: "Google Gemini", openai: "OpenAI-compatible", eduai: "EduAI", mock: "Mock (canned replies)" };
-const SHOWN = ["ollama", "openrouter", "gemini"];
+const SHOWN = ["ollama", "eduai", "openrouter", "gemini"];
+
+const EDUAI_MODELS = Object.keys(EDUAI_CONTEXT);
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -43,6 +46,10 @@ export async function readModelSettings(): Promise<ModelSettings> {
       info.suggestions = free;
       info.keyUrl = "https://openrouter.ai/keys";
       info.note = "Models ending in :free cost nothing; you only need a free account and its key. They have a daily request limit, and VibeLearner makes a few requests per message.";
+    } else if (id === "eduai") {
+      info.suggestions = EDUAI_MODELS;
+      info.keyUrl = "https://my.eduai.ok.ubc.ca";
+      info.note = "UBC's campus models: nothing leaves UBC. You need API access from an EduAI administrator; then create a key in EduAI's Settings, then API Keys. Off campus, connect to the UBC VPN. The key allows 200 requests and 200,000 tokens a day by default, and VibeLearner makes a few requests per message.";
     } else if (id === "gemini") {
       info.suggestions = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
       info.keyUrl = "https://aistudio.google.com/apikey";

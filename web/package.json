@@ -10,6 +10,7 @@
     "dev": "react-router dev",
     "dev:mock": "node scripts/dev-mock.mjs",
     "start": "react-router-serve ./build/server/index.js",
+    "test": "node --test test/*.test.ts",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {

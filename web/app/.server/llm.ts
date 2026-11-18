@@ -1,4 +1,5 @@
 import type { Settings } from "./config";
+import { EDUAI_ENDPOINT, eduaiComplete } from "./eduai";
 import { mockReply } from "./mock";
 
 export type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -21,16 +22,16 @@ export type CallResult = {
   ms: number;
 };
 
-/** The setting naming a provider's model: OpenRouter and Gemini have their own, the rest share "model". */
+/** The setting naming a provider's model: OpenRouter, Gemini and EduAI have their own, the rest share "model". */
 export function modelKeyFor(provider: string): string {
-  return ({ openrouter: "openrouter.model", gemini: "gemini.model" } as Record<string, string>)[provider] ?? "model";
+  return ({ openrouter: "openrouter.model", gemini: "gemini.model", eduai: "eduai.model" } as Record<string, string>)[provider] ?? "model";
 }
 
 /** The provider in use and the model it runs: what gets called, and what study logs record. */
 export function modelChoice(cfg: Settings): { provider: string; model: string } {
   const base = String(cfg.get("model") || "qwen3-coder:30b");
   let provider = String(cfg.get("apiProvider") ?? "ollama").toLowerCase();
-  if (provider === "auto") provider = base.startsWith("gemini") ? "gemini" : base.startsWith("eduai") ? "eduai" : "ollama";
+  if (provider === "auto") provider = base.startsWith("gemini") ? "gemini" : /^(eduai|vllm:)/.test(base) ? "eduai" : "ollama";
   return { provider, model: String(cfg.get(modelKeyFor(provider)) || base) };
 }
 
@@ -52,24 +53,17 @@ async function route(args: CallArgs): Promise<{ text: string; provider: string }
   if (provider === "mock") return { text: await mockReply(args.system ?? "", args.prompt), provider };
 
   if (provider === "eduai") {
-    const apiKey = cfg.get<string>("eduaiApiKey") || "";
-    if (!apiKey) throw new Error("EduAI API key missing.");
-    const res = await fetch(cfg.get<string>("eduaiEndpoint") || "https://eduai.ok.ubc.ca/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-      body: JSON.stringify({
-        messages: [
-          ...(args.system ? [{ role: "user", content: `[Instructions]\n${args.system}` }] : []),
-          ...history,
-          { role: "user", content: args.prompt },
-        ],
-        model,
-        courseCode: cfg.get<string>("courseCode") || "DEMO101",
-      }),
+    const reply = await eduaiComplete({
+      endpoint: cfg.get<string>("eduaiEndpoint") || EDUAI_ENDPOINT,
+      apiKey: cfg.get<string>("eduaiApiKey") || "",
+      model,
+      system: args.system,
+      messages: [...history, { role: "user", content: args.prompt }],
+      maxTokens: Number(cfg.get("eduai.maxTokens")) || 4096,
+      temperature,
+      maxConcurrent: Number(cfg.get("eduai.maxConcurrent")) || 2,
     });
-    if (!res.ok) throw new Error(`EduAI Error: ${res.status}`);
-    const data: any = await res.json();
-    return { text: data?.response || "", provider };
+    return { text: reply.text, provider };
   }
 
   if (provider === "gemini") {
