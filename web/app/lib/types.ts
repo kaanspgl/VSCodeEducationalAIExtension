@@ -66,6 +66,8 @@ export type VibeView = {
     part: number; parts: number; concept: string; step: "pre" | "work" | "post" | "done"; url?: string; tasks: string[]; task: number;
     /** Suggested minutes for this part's questions (0 = none) and when the participant started them (ms since 1970). */
     minutes: number; started?: number;
+    /** The part can't be finished before its minutes are up (study.fixedTime). */
+    fixedTime?: boolean;
   };
 };
 

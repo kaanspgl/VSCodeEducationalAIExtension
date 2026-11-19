@@ -224,6 +224,8 @@ function StudyBar({ view }: { view: VibeView }) {
   const last = st.task >= st.tasks.length - 1;
   // Time spent against the suggested time. Nothing is cut off when it runs out.
   const over = st.minutes > 0 && secs !== undefined && secs >= st.minutes * 60;
+  // With fixed time the part can't be finished before then (the server refuses it too).
+  const locked = !!st.fixedTime && st.minutes > 0 && !over;
   return (
     <section className="studybar" aria-label="Study question">
       <div className="quiz-head">
@@ -235,14 +237,18 @@ function StudyBar({ view }: { view: VibeView }) {
         )}
       </div>
       <div className="studytask">{st.tasks[st.task]}</div>
+      {locked && last && (
+        <p className="hint">This is the last question. The part goes on until the clock reaches {st.minutes}:00: until then, keep working with your programs any way you like.</p>
+      )}
       <div className="cactions">
         <button className="btn secondary sm" disabled={view.busy || st.task === 0} onClick={() => action("studyPrev")}>◀ Previous</button>
         {!last && <button className={`btn ${over ? "secondary" : ""} sm`} disabled={view.busy} onClick={() => action("studyNext")}>Next question ▶</button>}
         <div className="grow" />
         {/* Always there: when time is up a participant finishes from wherever they are, without paging through the rest. */}
-        <button className={`btn ${last || over ? "" : "ghost"} sm`} disabled={view.busy}
+        <button className={`btn ${(last && !locked) || over ? "" : "ghost"} sm`} disabled={view.busy || locked}
+          title={locked ? `You can finish this part when the clock reaches ${st.minutes}:00` : undefined}
           onClick={() => { if (confirm(`Finish part ${st.part + 1}? You can't come back to it afterwards.`)) action("studyFinish"); }}>
-          Finish part {st.part + 1}
+          {locked ? `Finish part ${st.part + 1} at ${st.minutes}:00` : `Finish part ${st.part + 1}`}
         </button>
       </div>
     </section>

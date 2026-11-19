@@ -108,6 +108,8 @@ export type ParticipantSummary = {
   predictRight: number;
   /** Predictions that matched the output exactly (spacing aside), without the model's judgement. */
   predictExact: number;
+  /** Predictions that named none of the printed numbers ("the total"): counted as not right, whatever the model said. */
+  predictVague: number;
   predictTotal: number;
   predictSkipped: number;
   questionsRight: number;
@@ -118,7 +120,10 @@ export type ParticipantSummary = {
   itemsVerified: number;
   itemsCorrected: number;
   itemsDropped: number;
-  /** Questions shown without a run check (not a "what would it print" question, or the changed program couldn't run). */
+  /**
+   * Questions shown without a run confirming their key: not a "what would it print" question, the changed program
+   * couldn't run, or no choice named the output and the run didn't rule the key out.
+   */
   itemsUnverified: number;
   /** Modify challenges whose solution was run: kept because it changes the output, or thrown out because it doesn't. */
   challengesVerified: number;
@@ -142,7 +147,7 @@ export type ParticipantSummary = {
 const blank = (code: string): ParticipantSummary => ({
   code, conditions: [], sessions: 0, activeSec: 0, waitSec: 0, modelSec: 0, events: 0, requests: 0, questionsAsked: 0, questionsInTour: 0, questionsDuringModify: 0,
   ideasUnaided: 0, ideasScaffolded: 0, ideasSkipped: 0, accepted: 0, acceptedViewed: 0, acceptedDiffOpened: 0, acceptedToured: 0, rejected: 0, selfEdits: 0,
-  questionReached: 0, tasksWithCode: 0, predictRight: 0, predictExact: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0,
+  questionReached: 0, tasksWithCode: 0, predictRight: 0, predictExact: 0, predictVague: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0,
   modifyGiven: 0, itemsVerified: 0, itemsCorrected: 0, itemsDropped: 0, itemsUnverified: 0, challengesVerified: 0, challengesDropped: 0, runs: 0, runsDuringModify: 0,
   pastesBlocked: 0, errors: 0, configs: [],
 });
@@ -193,7 +198,8 @@ function count(k: Tally, e: any, timed = true) {
     case "vibe_error": s.errors++; break;
     case "vibe_gate":
       if (d.kind === "done") d.scaffolded?.idea || d.scaffolded?.steps ? s.ideasScaffolded++ : s.ideasUnaided++;
-      else if (d.kind === "skipped") s.ideasSkipped++;
+      // Pressing Skip, or moving to another question before finishing it.
+      else if (d.kind === "skipped" || d.kind === "left") s.ideasSkipped++;
       break;
     case "vibe_change":
       if (d.status === "accepted") {
@@ -218,12 +224,18 @@ function count(k: Tally, e: any, timed = true) {
       if (typeof d.chosen === "number") { s.questionsTotal++; if (d.correct) s.questionsRight++; }
       break;
     case "vibe_learn":
-      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; if (d.exact) s.predictExact++; }
+      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; if (d.exact) s.predictExact++; if (d.vague) s.predictVague++; }
       else if (d.kind === "question_unverified") s.itemsUnverified++;
       else if (d.kind === "stage" && d.stage === "predict" && d.status === "skipped") s.predictSkipped++;
       else if (d.kind === "challenge_start") s.modifyGiven++;
       else if (d.kind === "challenge_check" && d.done && !k.solved.has(String(d.id))) { k.solved.add(String(d.id)); s.modifyDone++; }
-      else if (d.kind === "question_check") d.verdict === "verified" ? s.itemsVerified++ : d.verdict === "corrected" ? s.itemsCorrected++ : s.itemsDropped++;
+      else if (d.kind === "question_check") {
+        // "unconfirmed": no choice named the output, and the run didn't rule the key out, so it was shown as written.
+        if (d.verdict === "verified") s.itemsVerified++;
+        else if (d.verdict === "corrected") s.itemsCorrected++;
+        else if (d.verdict === "unconfirmed") s.itemsUnverified++;
+        else s.itemsDropped++;
+      }
       else if (d.kind === "challenge_check_solution") { if (d.same) s.challengesDropped++; else if (d.after !== undefined) s.challengesVerified++; }
       else if (d.kind === "student_edit" && !d.duringChallenge) {
         const last = k.lastEdit.get(String(d.path));
@@ -340,6 +352,7 @@ const COLUMNS: [string, (s: ParticipantSummary) => string | number][] = [
   ["ideas_skipped", (s) => s.ideasSkipped],
   ["predictions_right", (s) => s.predictRight],
   ["predictions_exact", (s) => s.predictExact],
+  ["predictions_without_a_value", (s) => s.predictVague],
   ["predictions_total", (s) => s.predictTotal],
   ["predictions_skipped", (s) => s.predictSkipped],
   ["questions_right", (s) => s.questionsRight],
@@ -500,6 +513,11 @@ export async function readiness(rows: ParticipantSummary[]): Promise<Check[]> {
   if (!plan.length) add("Study plan", "fail", "No plan is loaded, so a research session is one open conversation with no parts or quizzes. Press “Load the Loops and Lists plan”.");
   else if (same) add("Study plan", "ok", "The Loops and Lists plan: two parts, three tasks each, 12 minutes each.");
   else add("Study plan", "warn", `A plan of your own: ${plan.map((p) => `${p.concept} (${p.tasks.length} task${p.tasks.length === 1 ? "" : "s"}, ${p.minutes || "no"} min)`).join(", ")}. It differs from the Loops and Lists plan in the proposal.`);
+  if (plan.length) {
+    const without = plan.reduce((n, p) => n + p.tasks.filter((_, k) => !p.ideas?.[k]?.length).length, 0);
+    if (without) add("Key ideas", "warn", `${without} task${without === 1 ? " has" : "s have"} no key ideas, so “Explain the idea” checks those explanations against ideas the model writes, which can differ between participants. Add them after “||” on each task line, or press “Load the Loops and Lists plan”, which has them.`);
+    else add("Key ideas", "ok", "Every task has key ideas, so every participant's explanation is checked against the same ones.");
+  }
 
   // The quizzes
   if (plan.length) {
@@ -551,6 +569,7 @@ export async function readiness(rows: ParticipantSummary[]): Promise<Check[]> {
   else add("Study protocol", "warn", "study.strictProtocol is off, so Structured mode also has clarifying questions, prompt tips and the progress panel, which the proposal doesn't describe.");
   if (!protocol.sameCodePrompt) add("Code-writing prompt", "warn", "study.sameCodePrompt is off, so the two modes write code from different prompts. The proposal says they are the same.");
   if (!protocol.blockPaste) add("Pasting", "warn", "study.blockPaste is off, so participants can paste the task text into the chat box. A pasted task states the input and output, so request scores (H3) would measure copying; the scoring key flags pasted requests.");
+  if (!protocol.fixedTime) add("Time on each topic", "warn", "study.fixedTime is off, so a part can be finished before its minutes are up. Regular mode's tasks go much faster, so the Structured topic would get more time on task, and the quiz gains (H1) would partly measure time.");
 
   // The start screen
   const locked = ["true", "1"].includes(String(cfg.get("lockSettings") ?? ""));

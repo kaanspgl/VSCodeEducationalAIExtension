@@ -3,7 +3,7 @@
  *
  * Structured vibe coding = PRIMM (Predict, Run, Investigate, Modify, Make; Sentance et al., 2019)
  * with the AI doing the Make step. The student gets the code quickly and learns it after the fact:
- *   Step 1  Explain the idea         — WHAT the program does, in plain words; the AI asks guiding questions until it is there.
+ *   Step 1  Explain the idea         — how the program works, in plain words: what it starts with, its steps, what it shows.
  *   Step 2  Walk through the code    — the AI writes it from the idea, then walks through it before the student accepts it.
  *   Step 3  Predict, run & modify    — predict the output and run it, a "what if" question, then a small change to make.
  * With learning.requireSteps, the thesis plan's "Write the steps" (every step, in any form, no code, checked before
@@ -16,7 +16,7 @@
  *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v6-2026-11';
+export const VIBE_PROMPT_VERSION = 'vibe-v7-2026-11';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -123,25 +123,35 @@ export function actionPrompt(contextText: string, request: string, planText?: st
 
 export const IDEA_SYSTEM = [
   'You run Step 1 ("Explain the idea") of structured vibe coding for a first-year programming student. You do NOT write code.',
-  'Before the AI writes the code, the student says in plain words WHAT the program should do: what goes in, what happens (what repeats or gets decided), and what comes out.',
-  'This step is about WHAT, never HOW. Do NOT ask about variables, counters, loop mechanics, data types, syntax or how the computer does it: the student learns that afterwards, when the code is walked through.',
+  'Before the AI writes the code, the student explains in plain words how the program will work, the way they would explain it to a friend: (1) what it starts with or works on, (2) its steps in order (what it repeats, what it checks or decides, what it keeps track of), and (3) what it shows at the end.',
+  'Plain words are all that is needed: no code, no syntax, no variable names. Naming the goal is not explaining it: "add the numbers from 1 to 50 and print the total" says what it starts with and what it shows, but not the steps in between.',
   '',
-  'key_ideas: the 2-3 things a person would say to describe this program\'s behaviour in plain words (use the KEY IDEAS given, if any). Example for "add up every whole number from 0 to 100 and print the total": go through the numbers 0 to 100; add them up as you go; print the total. Example for "print the number the user enters and the next 5": ask the user for a number; print it and the 5 numbers after it.',
+  'key_ideas: the 3-4 things a complete plain-words explanation of this program says, in order. If KEY IDEAS FOR THIS TASK are given and the student wants that program, key_ideas must be exactly those, word for word. Otherwise write your own, the same way. Example for "add up every whole number from 0 to 100 and print the total": go through the numbers from 0 to 100; add each number to a running total; print the total at the end.',
+  'evidence: one entry per key idea, in the same order: the student\'s own words that say that idea, copied exactly from any STUDENT line (the first one, their request, counts too), or "" if no line says it. One sentence can be the evidence for several ideas. An idea counts when the student says the same thing loosely or in other words: "show", "display" and "print" mean the same, "as I go from 1 to 50" is going through the numbers, and "add each one to what I have so far" is a running total. Never require detail the key idea does not state.',
   'verdict:',
-  '- "enough": the student has described the behaviour, in any wording, even briefly. Be generous: if a reasonable person would understand what the program does from it, it is enough.',
-  '- "missing": an important part of the behaviour is not described at all (e.g. they never said what is printed).',
-  '- "misconception": the described behaviour would not do what they asked for.',
+  '- "enough": every key idea has evidence.',
+  '- "missing": at least one key idea has no evidence yet.',
+  '- "misconception": what they describe would not give the result they asked for.',
   '- "unsure": the student says they do not know.',
-  'reply (when not enough): ONE short, friendly question about the missing part of the BEHAVIOUR (e.g. "What should the program show at the end?"), without giving it away. For "misconception", gently question it. For "unsure", give a short everyday analogy first, then the question. At most 50 words. Never code.',
-  'reply (when enough): one short sentence confirming what they described.',
+  'reply (when not enough): ONE short, friendly question that leads them to the FIRST key idea without evidence, without giving it away. Ask about it the way you would do it by hand (e.g. "If you added them up yourself on paper, what would you do with each number?"). Never ask about anything that is not one of the key ideas (such as what a total starts at, or names for things). For "misconception", gently question it with a small case. For "unsure", give a short everyday analogy first, then the question. At most 50 words. Never code, and never ask for variable names or syntax.',
+  'reply (when enough): one short sentence saying what they explained well.',
   'If this is the final round and something is still missing: verdict "missing", and the reply briefly STATES the missing part in plain words (no code and no question), so the code can be written.',
-  'Respond with ONLY JSON: {"verdict":"enough|missing|misconception|unsure","key_ideas":["..."],"covered":[0],"reply":"..."}',
+  'Respond with ONLY JSON: {"verdict":"enough|missing|misconception|unsure","key_ideas":["..."],"evidence":["..."],"reply":"..."}',
 ].join('\n');
 
-export function ideaPrompt(request: string, transcript: string, round: number, maxRounds: number, keyIdeas?: string[]): string {
+/**
+ * `task` and `taskIdeas`: the study task the student is working on, and the instructor's key ideas for it.
+ * `explained`: the key ideas the student has already explained in earlier rounds.
+ */
+export function ideaPrompt(request: string, transcript: string, round: number, maxRounds: number, keyIdeas?: string[], task?: string, taskIdeas?: string[], explained?: number[]): string {
   return [
     `THE STUDENT WANTS: ${request}`,
-    keyIdeas?.length ? `KEY IDEAS (from the instructor):\n${keyIdeas.map((k, i) => `${i}. ${k}`).join('\n')}` : '',
+    keyIdeas?.length ? `KEY IDEAS:\n${keyIdeas.map((k, i) => `${i}. ${k}`).join('\n')}`
+      : task && taskIdeas?.length ? `THE STUDENT'S TASK: ${task}\nKEY IDEAS FOR THIS TASK (from the instructor):\n${taskIdeas.map((k, i) => `${i}. ${k}`).join('\n')}` : '',
+    keyIdeas?.length && explained?.length ? `ALREADY EXPLAINED in earlier rounds (do not ask about these again): ${explained.join(', ')}` : '',
+    (keyIdeas?.length || taskIdeas?.length)
+      ? `"evidence" must have exactly ${(keyIdeas?.length ? keyIdeas : taskIdeas!).length} entries: entry 0 for key idea 0, and so on. If one sentence says several ideas, repeat it in each of their entries.`
+      : '"evidence" must have exactly one entry per key idea you list, in the same order.',
     `Round ${round} of at most ${maxRounds}.`,
     '',
     `CONVERSATION SO FAR (Step 1):\n${transcript}`,
@@ -298,7 +308,8 @@ export const RUN_INPUT_SYSTEM = [
 export const PREDICT_FEEDBACK_SYSTEM = [
   'A beginner predicted what their program prints. You get the code, the input, the ACTUAL output (ground truth) and their prediction.',
   'Write the feedback TO the student as "you" ("You spotted…"), never about "the student".',
-  '- correct: true if the prediction matches the actual output in substance. Ignore formatting differences such as spacing, brackets, quotes, commas or capitalisation.',
+  '- correct: true if the prediction matches the actual output in substance. Ignore formatting differences such as spacing, brackets, quotes, commas or capitalisation. A prediction must say what is shown: one that only describes what the program works out ("the total", "the sum of the numbers") without the value is NOT correct.',
+  '- If they gave no value, the feedback says so kindly and suggests working out the first few rounds of the loop by hand to see the pattern.',
   '- feedback: 1-3 kind sentences. If correct, name the reasoning they got right. If not, point to the lines that produce the actual output and where their mental model differed.',
   'Respond with ONLY JSON: {"correct":true,"feedback":"..."}',
 ].join('\n');
@@ -320,7 +331,7 @@ const MCQ_RULES = [
   'Refer to file names and line numbers. Include any short snippet the student needs in the stem.',
   'Explanations talk TO the student as "you", never about "the student".',
   '"correct" is the 0-based index of the right choice; "explanation" is 1-2 sentences; "concept" is the programming concept tested (1-3 words).',
-  '"change": ONLY for a question about what the program would PRINT after a change: {"find": "the exact existing line(s) of the file, copied without line numbers", "replace": "the same line(s) after the change"}. The change is run to check your answer, so each choice must state the exact output it predicts. Omit "change" for other questions.',
+  '"change": ONLY for a question about what the program would PRINT after a change: {"find": "the exact existing line(s) of the file, copied without line numbers", "replace": "the same line(s) after the change"}. The change is run to check your answer, so START every choice with the exact output it predicts, then the reason (e.g. "It prints 86, because it now counts the numbers that are NOT multiples of 7"). Omit "change" for other questions.',
   'Respond with ONLY JSON: {"questions":[{"stem":"...","choices":["...","...","...","..."],"correct":0,"explanation":"...","concept":"...","change":{"find":"...","replace":"..."}}]}',
 ].join('\n');
 

@@ -30,5 +30,6 @@
 
   "study.strictProtocol": true,
   "study.sameCodePrompt": true,
-  "study.blockPaste": true
+  "study.blockPaste": true,
+  "study.fixedTime": true
 }

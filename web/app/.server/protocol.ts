@@ -36,6 +36,11 @@ export type Protocol = {
   sameCodePrompt: boolean;
   /** Nothing can be pasted or dropped into the chat box, so requests are in the participant's own words (H3). */
   blockPaste: boolean;
+  /**
+   * A part can't be finished before its minutes are up, so both modes get the same time on each topic: without
+   * it, Regular mode's quicker tasks would leave the Structured topic with several times the time on task (H1).
+   */
+  fixedTime: boolean;
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
@@ -61,6 +66,7 @@ export function protocolFor(cfg: Settings, inStudy: boolean): Protocol {
     progressPanel: !strict,
     sameCodePrompt: inStudy && flag(cfg, "study.sameCodePrompt", true),
     blockPaste: inStudy && flag(cfg, "study.blockPaste", true),
+    fixedTime: inStudy && flag(cfg, "study.fixedTime", true),
   };
 }
 
@@ -82,7 +88,8 @@ export function studyFingerprint(cfg: Settings, parts: StudyPart[]): { hash: str
     // Where programs run decides which Python the predictions and checks are made against.
     runner: runTargetFor(cfg).judge0 ? "judge0" : "local",
     protocol: protocolFor(cfg, true),
-    parts: parts.map((p) => ({ concept: p.concept, minutes: p.minutes, tasks: p.tasks })),
+    // Key ideas only when there are some, so a plan without them keeps the fingerprint it had.
+    parts: parts.map((p) => ({ concept: p.concept, minutes: p.minutes, tasks: p.tasks, ...(p.ideas ? { ideas: p.ideas } : {}) })),
   };
   return { hash: createHash("sha256").update(JSON.stringify(details)).digest("hex").slice(0, 10), details };
 }

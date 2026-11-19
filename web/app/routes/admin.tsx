@@ -5,7 +5,7 @@ import { deleteParticipantData } from "~/.server/data";
 import { readFreeze, writeFreeze } from "~/.server/protocol";
 import { addParticipants, CODE_RE, removeParticipant, withdrawParticipant } from "~/.server/roster";
 import { endSessionsFor } from "~/.server/sessions";
-import { cleanPlan, EXAMPLE_PLAN, readStudy, resetProgress, writePlan, type StudyPart } from "~/.server/study";
+import { cleanPlan, EXAMPLE_PLAN, parseTaskLines, readStudy, resetProgress, writePlan, type StudyPart } from "~/.server/study";
 import type { Level } from "~/lib/types";
 import type { Route } from "./+types/admin";
 
@@ -102,7 +102,7 @@ export async function action({ request }: Route.ActionArgs) {
   if (intent === "plan") {
     const get = (name: string) => form.getAll(name).map(String);
     const [concepts, pre, post, tasks, minutes] = [get("concept"), get("preUrl"), get("postUrl"), get("tasks"), get("minutes")];
-    const typed = concepts.map((concept, i) => ({ concept, preUrl: pre[i] ?? "", postUrl: post[i] ?? "", tasks: (tasks[i] ?? "").split(/\r?\n/), minutes: minutes[i] }));
+    const typed = concepts.map((concept, i) => ({ concept, preUrl: pre[i] ?? "", postUrl: post[i] ?? "", ...parseTaskLines(tasks[i] ?? ""), minutes: minutes[i] }));
     const parts = cleanPlan(typed);
     writePlan(parts, String(form.get("endUrl") ?? ""));
     const badLinks = typed.some((t, i) => [t.preUrl, t.postUrl].some((u) => u.trim() && !parts.some((p) => p.preUrl === u.trim() || p.postUrl === u.trim())));
@@ -218,7 +218,7 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
         </p>
         <Form method="post" className="stack">
           <input type="hidden" name="intent" value="plan" />
-          {[...plan, ...Array.from({ length: Math.max(1, 2 - plan.length) }, () => ({ concept: "", tasks: [] as string[], preUrl: "", postUrl: "", minutes: 0 }))].map((p, i) => (
+          {[...plan, ...Array.from({ length: Math.max(1, 2 - plan.length) }, (): StudyPart => ({ concept: "", tasks: [], preUrl: "", postUrl: "", minutes: 0 }))].map((p, i) => (
             <fieldset className="partbox" key={`${i}:${plan.length}:${p.concept}:${p.tasks.length}`}>
               <legend>{i < plan.length ? `Part ${i + 1}` : `Part ${i + 1} (new)`}</legend>
               <div className="conceptrow">
@@ -237,8 +237,8 @@ export default function Admin({ loaderData, actionData }: Route.ComponentProps) 
                   <input type="text" name="postUrl" defaultValue={p.postUrl} placeholder="https://…qualtrics.com/jfe/form/…" autoComplete="off" spellCheck={false} />
                 </label>
               </div>
-              <label className="field">Questions <span className="muted">(one per line, shown one at a time)</span>
-                <textarea name="tasks" rows={4} defaultValue={p.tasks.join("\n")} placeholder={"Write a program that prints the numbers 1 to 10.\nWrite a program that adds up the even numbers from 0 to 100."} />
+              <label className="field">Questions <span className="muted">(one per line, shown one at a time; after <code>||</code>, the key ideas of a complete explanation, separated by <code>;</code>, which participants don't see)</span>
+                <textarea name="tasks" rows={4} defaultValue={p.tasks.map((t, k) => (p.ideas?.[k]?.length ? `${t} || ${p.ideas[k].join("; ")}` : t)).join("\n")} placeholder={"Write a program that prints the numbers 1 to 10. || go through the numbers 1 to 10; print each one\nWrite a program that adds up the even numbers from 0 to 100."} />
               </label>
             </fieldset>
           ))}

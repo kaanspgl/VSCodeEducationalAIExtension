@@ -123,3 +123,93 @@ export function onlyWordingChanged(before: string, after: string): boolean {
   let i = 0;
   return b.every(n => { while (i < a.length && a[i] !== n) i++; return i++ < a.length; });
 }
+
+/**
+ * Does an answer choice state a result the real run rules out? It does when it names a number that is in none
+ * of: the changed program's real output, the current output, or `context` (the code, the change, the question
+ * and the request, where numbers like a range's end or a divisor come from, as in "counts the numbers between 1
+ * and 100 that are NOT divisible by 7"). A number the choice says is printed ("would print 0", "the total is
+ * 15") must be in the real output, wherever else it appears. A choice that describes the result in words, with
+ * no such number, can't be ruled out by the run.
+ */
+export function contradictsOutput(choice: string, actual: string, current: string | undefined, context: string): boolean {
+  const nums = (s: string) => new Set(s.match(/-?\d+(\.\d+)?/g) ?? []);
+  const out = nums(actual);
+  const claimed = [...choice.matchAll(/\b(?:prints?|printed|outputs?|shows?|displays?|returns?|gives?|would be|is now|becomes?|results? in|(?:total|count|sum|answer|result) (?:is|of|would be))\s*:?\s*(-?\d+(?:\.\d+)?)/gi)].map(m => m[1]);
+  if (claimed.some(n => !out.has(n))) return true;
+  const allowed = new Set([...out, ...nums(current ?? ''), ...nums(context)]);
+  return [...nums(choice)].some(n => !allowed.has(n));
+}
+
+const NUMBER_WORDS = /\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\b/i;
+
+/**
+ * A prediction that never says what is printed: the output has numbers, and the guess names none of them
+ * ("the sum of all the numbers from 1 to 50" for 1275, "the total"). That describes what the program works
+ * out, not what it shows, so it can't count as correct however the model judges it. A wrong number ("1250")
+ * is a real prediction and is left to the model; so are numbers in words ("fourteen").
+ */
+export function namesNoOutputNumber(prediction: string, actual: string): boolean {
+  const nums = (s: string) => s.replace(/(\d),(?=\d{3}\b)/g, '$1').match(/-?\d+(\.\d+)?/g) ?? [];
+  const out = new Set(nums(actual));
+  if (!out.size || nums(prediction).some(n => out.has(n))) return false;
+  return !NUMBER_WORDS.test(prediction);
+}
+
+/**
+ * A question about the code rather than a request to change it: "why is it 51 and not 50", "what does range do?",
+ * "how does the loop stop". Asking for a change, even as a question ("can you make it go to 100?"), is not one.
+ */
+export function isPlainQuestion(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  const asks = /\?\s*$/.test(t) ||
+    /^(why|what|what's|whats|how come|how does|how do|how is|how are|how many|when|where|which|who|explain|is|are|does|do|did|can you explain|could you explain|i don'?t (get|understand)|i was asking)\b/.test(t);
+  // "why does it use % 7" is a question; "can you make it…" and "how do I make it…" ask for a change.
+  return asks && !isChangeRequest(t) && !/\bhow (do|can|could|would|should) (i|we)\b/.test(t);
+}
+
+/**
+ * Are `quote` (words the model says the student wrote) really the student's? True when the quote is in `said`
+ * (everything the student wrote), ignoring case, spacing and punctuation, or when nearly all of its words are
+ * (a model often trims or slightly rewords what it copies). An empty quote is not evidence.
+ */
+export function saidByStudent(quote: string, said: string): boolean {
+  const words = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  const q = words(quote);
+  if (!q.length) return false;
+  const s = words(said);
+  if (` ${s.join(' ')} `.includes(` ${q.join(' ')} `)) return true;
+  const have = new Set(s);
+  const content = q.filter(w => w.length > 2);
+  if (!content.length) return false;
+  return content.filter(w => have.has(w)).length / content.length >= 0.75;
+}
+
+const IDEA_STOPWORDS = new Set(['the', 'and', 'then', 'that', 'this', 'them', 'they', 'with', 'from', 'each', 'every', 'one', 'all', 'its', 'are', 'for', 'into', 'onto', 'when', 'whenever', 'end', 'through', 'way', 'also', 'such', 'like', 'once', 'any', 'some', 'can', 'will', 'should', 'would', 'your', 'you', 'out', 'up', 'down', 'over', 'new']);
+
+/**
+ * Does what the student wrote contain every content word of a key idea (small words and filler left out, plurals
+ * and endings ignored)? A safety net for the model's evidence: "adds the numbers from 1 to 50" contains all of "go
+ * through the numbers from 1 to 50". It is strict on purpose, so a task typed out ("adds up all the whole numbers
+ * from 1 to 50 and prints the total") does not count as explaining "add each number to a running total".
+ */
+export function wordsCoverIdea(idea: string, said: string): boolean {
+  const stem = (w: string) => w.length > 5 && w.endsWith('ing') ? w.slice(0, -3) : w.length > 4 && w.endsWith('ed') ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w;
+  const words = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).map(stem);
+  const need = words(idea).filter(w => (/^\d+$/.test(w) || w.length > 2) && !IDEA_STOPWORDS.has(w));
+  if (!need.length) return false;
+  const have = new Set(words(said));
+  return need.every(w => have.has(w));
+}
+
+/**
+ * Plainly asks for the code to be changed: starts with a change verb ("make it go to 100", "change 7 to 3"), or
+ * asks someone to do one ("can you add a print", "I want it to count to 100"). A statement about the code ("so it
+ * keeps a running total and adds each number") is not one, even though it uses "add".
+ */
+export function isChangeRequest(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return /^(please\s+|now\s+|ok(ay)?,?\s+|and\s+)?(make|change|add|write|fix|create|build|update|modify|remove|delete|replace|rewrite|turn|use|put|let|have it|get it)\b/.test(t) ||
+    /\b(can|could|would|will) you\s+(please\s+)?(make|change|add|write|fix|create|build|update|modify|remove|delete|replace|rewrite|turn|use|put|let|have it|get it)\b/.test(t) ||
+    /\b(i want|i'd like|i would like) (it|the program|the code|you) to\b/.test(t);
+}

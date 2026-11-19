@@ -141,3 +141,69 @@ test('a challenge that only rewords the output (same numbers) is cosmetic', () =
   assert.equal(onlyWordingChanged('Sorted: [1, 2, 3]\nLargest: 3', 'Sorted: [3, 2, 1]\nLargest: 3'), false); // reverse the sort
   assert.equal(onlyWordingChanged('1\n2\n3\nTotal: 6', '3\n2\n1\nTotal: 6'), false); // count down instead of up
 });
+
+const { contradictsOutput, namesNoOutputNumber, isPlainQuestion } = require('../out/vibe/checks');
+
+// From a dry run: changing `% 7 == 0` to `% 7 != 0` prints 86. The model's key described the result in words.
+test('a choice describing the result in words, with numbers from the code, is not ruled out by the run', () => {
+  const code = 'count = 0\nfor number in range(1, 101):\n    if number % 7 != 0:\n        count = count + 1\nprint(count)';
+  const context = `${code}\nWhat would happen if you changed line 4 to 'if number % 7 != 0:'?\ncount how many numbers between 1 and 100 are divisible by 7`;
+  assert.equal(contradictsOutput('The program would count how many numbers between 1 and 100 are NOT divisible by 7.', '86', '14', context), false);
+  assert.equal(contradictsOutput('The program would print 0 because no number satisfies the condition.', '86', '14', context), true);
+  assert.equal(contradictsOutput('It prints 86', '86', '14', context), false);
+  assert.equal(contradictsOutput('It prints 15', '86', '14', context), true);
+});
+
+test('a prediction that names none of the printed numbers is not a correct prediction', () => {
+  assert.equal(namesNoOutputNumber('the sum of all the numbers from 1 to 50', '1275'), true);
+  assert.equal(namesNoOutputNumber('the total', '1275'), true);
+  assert.equal(namesNoOutputNumber('1275', '1275'), false);
+  assert.equal(namesNoOutputNumber('it prints 1,275', '1275'), false);
+  assert.equal(namesNoOutputNumber('1250', '1275'), true); // wrong, but judged wrong by the model anyway
+  assert.equal(namesNoOutputNumber('fourteen', '14'), false);
+  assert.equal(namesNoOutputNumber('it says hello', 'hello'), false);
+});
+
+test('questions about the code are told apart from change requests', () => {
+  assert.equal(isPlainQuestion('why is it 51 and not 50'), true);
+  assert.equal(isPlainQuestion('what does range do?'), true);
+  assert.equal(isPlainQuestion('I was asking why the range goes to 51'), true);
+  assert.equal(isPlainQuestion('can you make it go to 100?'), false);
+  assert.equal(isPlainQuestion('change it so it checks for 3 instead of 7'), false);
+  assert.equal(isPlainQuestion('add up the numbers from 1 to 50'), false);
+  assert.equal(isPlainQuestion('how do I make it print each number'), false);
+  assert.equal(isPlainQuestion('why does it use % 7 == 0?'), true);
+  assert.equal(isPlainQuestion('what if it used range(1, 100) instead?'), true);
+});
+
+const { saidByStudent } = require('../out/vibe/checks');
+
+test('evidence for a key idea must come from what the student wrote', () => {
+  const said = 'make a program that adds the numbers from 1 to 50 \n I would add each one to what I have so far \n start at 1 and go up to 50, and at the end show the total';
+  assert.equal(saidByStudent('at the end show the total', said), true);
+  assert.equal(saidByStudent('At the end, show the total.', said), true);
+  assert.equal(saidByStudent('add each one to what I have', said), true);
+  assert.equal(saidByStudent('keep a running total and add each number to it', said), false);
+  assert.equal(saidByStudent('', said), false);
+});
+
+const { isChangeRequest, wordsCoverIdea } = require('../out/vibe/checks');
+
+test('the words of a key idea are found in what the student wrote, strictly', () => {
+  const task = 'Write a Python program that adds up all the whole numbers from 1 to 50 and prints the total.';
+  assert.equal(wordsCoverIdea('go through the numbers from 1 to 50', 'make a program that adds the numbers from 1 to 50'), true);
+  assert.equal(wordsCoverIdea('print the total at the end', 'make a program that adds the numbers from 1 to 50'), false);
+  assert.equal(wordsCoverIdea('print the total at the end', task), true);
+  assert.equal(wordsCoverIdea('add each number to a running total', task), false);
+  assert.equal(wordsCoverIdea('add each number to a running total', 'I keep a running total and add every number to it'), true);
+});
+
+test('a change request is told apart from a statement about the code', () => {
+  assert.equal(isChangeRequest('make it go to 100'), true);
+  assert.equal(isChangeRequest('change it so it checks for 3 instead of 7'), true);
+  assert.equal(isChangeRequest('can you add a line that prints each number?'), true);
+  assert.equal(isChangeRequest('I want it to count to 100'), true);
+  assert.equal(isChangeRequest('keep a running total, and add each number to it as I go from 1 to 50'), false);
+  assert.equal(isChangeRequest('so it adds each number to the total'), false);
+  assert.equal(isChangeRequest('ok that makes sense'), false);
+});

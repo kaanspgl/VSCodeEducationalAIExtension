@@ -53,6 +53,9 @@ const DEFAULTS: Record<string, unknown> = {
   // In a study-plan session, nothing can be pasted into the chat box: the task text names the input and output, so a
   // pasted request would score as a complete description (H3) without the participant describing anything.
   "study.blockPaste": true,
+  // In a study-plan session, a part can't be finished before its minutes are up, so both modes get the same time on
+  // each topic: Regular mode's tasks go much faster, and the quiz gains (H1) would otherwise partly measure time on task.
+  "study.fixedTime": true,
 };
 
 const FROM_ENV: Record<string, string> = {
