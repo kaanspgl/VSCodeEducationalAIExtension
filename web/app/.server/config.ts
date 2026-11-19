@@ -50,6 +50,9 @@ const DEFAULTS: Record<string, unknown> = {
   // In a study-plan session: keep to the study's protocol (see protocol.ts), and write code from one prompt in both modes.
   "study.strictProtocol": true,
   "study.sameCodePrompt": true,
+  // In a study-plan session, nothing can be pasted into the chat box: the task text names the input and output, so a
+  // pasted request would score as a complete description (H3) without the participant describing anything.
+  "study.blockPaste": true,
 };
 
 const FROM_ENV: Record<string, string> = {

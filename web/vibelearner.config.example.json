@@ -29,5 +29,6 @@
   "context.maxChars": 24000,
 
   "study.strictProtocol": true,
-  "study.sameCodePrompt": true
+  "study.sameCodePrompt": true,
+  "study.blockPaste": true
 }

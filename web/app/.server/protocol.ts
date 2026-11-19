@@ -34,6 +34,8 @@ export type Protocol = {
   progressPanel: boolean;
   /** Both conditions write code from the same system prompt. */
   sameCodePrompt: boolean;
+  /** Nothing can be pasted or dropped into the chat box, so requests are in the participant's own words (H3). */
+  blockPaste: boolean;
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
@@ -58,6 +60,7 @@ export function protocolFor(cfg: Settings, inStudy: boolean): Protocol {
     planLargeBuilds: strict ? false : flag(cfg, "learning.planLargeBuilds", true),
     progressPanel: !strict,
     sameCodePrompt: inStudy && flag(cfg, "study.sameCodePrompt", true),
+    blockPaste: inStudy && flag(cfg, "study.blockPaste", true),
   };
 }
 

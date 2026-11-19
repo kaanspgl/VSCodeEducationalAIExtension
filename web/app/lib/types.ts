@@ -60,7 +60,7 @@ export type VibeView = {
   targets: string[];
   levelLocked: boolean;
   /** What the panel shows: the mode's name (hidden in a research session, where participants aren't told it) and the progress panel. */
-  ui: { mode: boolean; progress: boolean };
+  ui: { mode: boolean; progress: boolean; noPaste?: boolean };
   /** Where the participant is in the study plan, if there is one: the part, its questions, and the quiz link for a "survey" step. */
   study?: {
     part: number; parts: number; concept: string; step: "pre" | "work" | "post" | "done"; url?: string; tasks: string[]; task: number;
@@ -106,7 +106,8 @@ export type Command =
   | { type: "begin"; participant?: string; consent?: boolean; level?: string }
   /** Sign out: back to the start screen, ready for someone else. A participant's place in the study is kept on the server. */
   | { type: "reset" }
-  | { type: "send"; text: string; target?: string }
+  /** `pasted`: how many characters of the message were pasted in and are still in it (logged for scoring requests). */
+  | { type: "send"; text: string; target?: string; pasted?: number }
   | { type: "action"; cmd: string; arg?: string }
   | { type: "quizAnswer"; choice: number }
   | { type: "open"; path: string }

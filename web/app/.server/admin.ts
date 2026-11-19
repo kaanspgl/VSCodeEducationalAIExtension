@@ -81,12 +81,18 @@ export type ParticipantSummary = {
   requests: number;
   /** Requests the AI answered without changing any code: questions about the code. */
   questionsAsked: number;
+  /** Of those, the ones asked during a walkthrough or while a Modify challenge was open (steps Structured mode requires). */
+  questionsInTour: number;
+  questionsDuringModify: number;
   ideasUnaided: number;
   ideasScaffolded: number;
   ideasSkipped: number;
   accepted: number;
   /** Accepted changes whose code the participant looked at first (viewed the diff or went through the walkthrough). */
   acceptedViewed: number;
+  /** The same, split by how: opening the diff (the participant's choice) or the walkthrough (required in Structured mode). Both can apply. */
+  acceptedDiffOpened: number;
+  acceptedToured: number;
   rejected: number;
   /** Times the participant edited code on their own initiative (not for a Modify challenge); typing within 30 seconds counts once. */
   selfEdits: number;
@@ -100,6 +106,8 @@ export type ParticipantSummary = {
   /** Seconds from the first question to Finish part (per-part summaries of finished parts). */
   partSec?: number;
   predictRight: number;
+  /** Predictions that matched the output exactly (spacing aside), without the model's judgement. */
+  predictExact: number;
   predictTotal: number;
   predictSkipped: number;
   questionsRight: number;
@@ -110,10 +118,16 @@ export type ParticipantSummary = {
   itemsVerified: number;
   itemsCorrected: number;
   itemsDropped: number;
+  /** Questions shown without a run check (not a "what would it print" question, or the changed program couldn't run). */
+  itemsUnverified: number;
   /** Modify challenges whose solution was run: kept because it changes the output, or thrown out because it doesn't. */
   challengesVerified: number;
   challengesDropped: number;
   runs: number;
+  /** Runs while a Modify challenge on that file was open: testing the required change. */
+  runsDuringModify: number;
+  /** Times the chat box refused a paste (study.blockPaste): attempts to copy text into a request. */
+  pastesBlocked: number;
   errors: number;
   /** Configuration fingerprints recorded when sessions started (more than one: something changed during data collection). */
   configs: string[];
@@ -126,10 +140,11 @@ export type ParticipantSummary = {
 };
 
 const blank = (code: string): ParticipantSummary => ({
-  code, conditions: [], sessions: 0, activeSec: 0, waitSec: 0, modelSec: 0, events: 0, requests: 0, questionsAsked: 0,
-  ideasUnaided: 0, ideasScaffolded: 0, ideasSkipped: 0, accepted: 0, acceptedViewed: 0, rejected: 0, selfEdits: 0, questionReached: 0, tasksWithCode: 0,
-  predictRight: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0, modifyGiven: 0,
-  itemsVerified: 0, itemsCorrected: 0, itemsDropped: 0, challengesVerified: 0, challengesDropped: 0, runs: 0, errors: 0, configs: [],
+  code, conditions: [], sessions: 0, activeSec: 0, waitSec: 0, modelSec: 0, events: 0, requests: 0, questionsAsked: 0, questionsInTour: 0, questionsDuringModify: 0,
+  ideasUnaided: 0, ideasScaffolded: 0, ideasSkipped: 0, accepted: 0, acceptedViewed: 0, acceptedDiffOpened: 0, acceptedToured: 0, rejected: 0, selfEdits: 0,
+  questionReached: 0, tasksWithCode: 0, predictRight: 0, predictExact: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0,
+  modifyGiven: 0, itemsVerified: 0, itemsCorrected: 0, itemsDropped: 0, itemsUnverified: 0, challengesVerified: 0, challengesDropped: 0, runs: 0, runsDuringModify: 0,
+  pastesBlocked: 0, errors: 0, configs: [],
 });
 
 type Tally = {
@@ -166,8 +181,15 @@ function count(k: Tally, e: any, timed = true) {
       break;
     case "vibe_wait": if (timed && typeof d.ms === "number") k.waitMs += d.ms; break;
     case "vibe_request": s.requests++; break;
-    case "vibe_reply": if (d.blocks === 0) s.questionsAsked++; break;
-    case "program_run": s.runs++; break;
+    case "vibe_reply":
+      if (d.blocks === 0) {
+        s.questionsAsked++;
+        if (d.inTour) s.questionsInTour++;
+        if (d.duringChallenge) s.questionsDuringModify++;
+      }
+      break;
+    case "program_run": s.runs++; if (d.duringChallenge) s.runsDuringModify++; break;
+    case "vibe_input": if (d.kind === "paste_blocked") s.pastesBlocked++; break;
     case "vibe_error": s.errors++; break;
     case "vibe_gate":
       if (d.kind === "done") d.scaffolded?.idea || d.scaffolded?.steps ? s.ideasScaffolded++ : s.ideasUnaided++;
@@ -177,6 +199,8 @@ function count(k: Tally, e: any, timed = true) {
       if (d.status === "accepted") {
         s.accepted++;
         if (d.reviewedBeforeAccept) s.acceptedViewed++;
+        if (d.viewedDiff) s.acceptedDiffOpened++;
+        if (d.toured) s.acceptedToured++;
         if (question && !k.codeAt.has(question)) k.codeAt.set(question, t);
       } else if (d.status === "rejected") s.rejected++;
       break;
@@ -194,7 +218,8 @@ function count(k: Tally, e: any, timed = true) {
       if (typeof d.chosen === "number") { s.questionsTotal++; if (d.correct) s.questionsRight++; }
       break;
     case "vibe_learn":
-      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; }
+      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; if (d.exact) s.predictExact++; }
+      else if (d.kind === "question_unverified") s.itemsUnverified++;
       else if (d.kind === "stage" && d.stage === "predict" && d.status === "skipped") s.predictSkipped++;
       else if (d.kind === "challenge_start") s.modifyGiven++;
       else if (d.kind === "challenge_check" && d.done && !k.solved.has(String(d.id))) { k.solved.add(String(d.id)); s.modifyDone++; }
@@ -298,16 +323,23 @@ const COLUMNS: [string, (s: ParticipantSummary) => string | number][] = [
   ["tasks_with_code_accepted", (s) => s.tasksWithCode],
   ["tasks_with_code_accepted_in_time", (s) => opt(s.tasksWithCodeInTime)],
   ["requests", (s) => s.requests],
+  ["pastes_blocked", (s) => s.pastesBlocked],
   ["questions_about_code", (s) => s.questionsAsked],
+  ["questions_in_walkthrough", (s) => s.questionsInTour],
+  ["questions_during_modify", (s) => s.questionsDuringModify],
   ["program_runs", (s) => s.runs],
+  ["program_runs_during_modify", (s) => s.runsDuringModify],
   ["own_edits", (s) => s.selfEdits],
   ["changes_accepted", (s) => s.accepted],
   ["accepted_after_viewing_code", (s) => s.acceptedViewed],
+  ["accepted_after_opening_diff", (s) => s.acceptedDiffOpened],
+  ["accepted_after_walkthrough", (s) => s.acceptedToured],
   ["changes_rejected", (s) => s.rejected],
   ["ideas_unaided", (s) => s.ideasUnaided],
   ["ideas_scaffolded", (s) => s.ideasScaffolded],
   ["ideas_skipped", (s) => s.ideasSkipped],
   ["predictions_right", (s) => s.predictRight],
+  ["predictions_exact", (s) => s.predictExact],
   ["predictions_total", (s) => s.predictTotal],
   ["predictions_skipped", (s) => s.predictSkipped],
   ["questions_right", (s) => s.questionsRight],
@@ -317,6 +349,7 @@ const COLUMNS: [string, (s: ParticipantSummary) => string | number][] = [
   ["quiz_items_verified", (s) => s.itemsVerified],
   ["quiz_items_corrected", (s) => s.itemsCorrected],
   ["quiz_items_dropped", (s) => s.itemsDropped],
+  ["quiz_items_unverified", (s) => s.itemsUnverified],
   ["modify_tasks_verified", (s) => s.challengesVerified],
   ["modify_tasks_dropped", (s) => s.challengesDropped],
   ["errors", (s) => s.errors],
@@ -343,7 +376,27 @@ export type RequestRow = {
   participant: string; order: string; part: number; concept: string; mode: string; question: number; task: string; ts: string; text: string;
   /** In the random fifth that a second person scores, to check agreement. */
   secondScorer: boolean;
+  /** Characters of the request that were pasted in, and the longest run of words it shares with the task text: high values mean it was copied, not described. */
+  pasted: number;
+  sharedWords: number;
 };
+
+/** The longest run of consecutive words two texts share (case and punctuation ignored). */
+export function sharedRun(a: string, b: string): number {
+  const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const x = words(a);
+  const y = words(b);
+  let best = 0;
+  let prev = new Array<number>(y.length + 1).fill(0);
+  for (let i = 1; i <= x.length; i++) {
+    const row = new Array<number>(y.length + 1).fill(0);
+    for (let j = 1; j <= y.length; j++) {
+      if (x[i - 1] === y[j - 1]) best = Math.max(best, (row[j] = prev[j - 1] + 1));
+    }
+    prev = row;
+  }
+  return best;
+}
 
 /**
  * The first request each participant typed for each study question that asked for a program: one the AI
@@ -382,10 +435,13 @@ export async function firstRequests(): Promise<RequestRow[]> {
       const [part, question] = [Number(m[1]), Number(m[2])];
       const participant = String(req.participant ?? file.slice(0, -6));
       const level = roster.find((r) => r.code.toLowerCase() === participant.toLowerCase())?.level;
+      const task = taskText.get(req.taskId) ?? plan[part - 1]?.tasks[question - 1] ?? "";
+      const text = String(req.data?.text ?? "");
       rows.push({
         id: createHash("sha256").update(`${participant}|${req.taskId}|${req.ts}`).digest("hex").slice(0, 8),
         participant, order: (level && ORDER[level]) || order, part, concept: plan[part - 1]?.concept ?? "", mode: MODE[req.condition] ?? String(req.condition ?? ""),
-        question, task: taskText.get(req.taskId) ?? plan[part - 1]?.tasks[question - 1] ?? "", ts: String(req.ts ?? ""), text: String(req.data?.text ?? ""), secondScorer: false,
+        question, task, ts: String(req.ts ?? ""), text, secondScorer: false,
+        pasted: Number(req.data?.pasted) || 0, sharedWords: sharedRun(text, task),
       });
     }
   }
@@ -400,8 +456,8 @@ export function requestsCsv(rows: RequestRow[], blind: boolean): string {
   return blind
     ? csv(["id", "concept", "task", "request", "second_scorer", "states_input_0_1", "states_output_0_1", "states_steps_0_1"],
       rows.map((r) => [r.id, r.concept, r.task, r.text, r.secondScorer ? "yes" : "", "", "", ""]))
-    : csv(["id", "participant", "order_group", "part", "concept", "mode", "question", "timestamp", "second_scorer"],
-      rows.map((r) => [r.id, r.participant, r.order, r.part, r.concept, r.mode, r.question, r.ts, r.secondScorer ? "yes" : ""]));
+    : csv(["id", "participant", "order_group", "part", "concept", "mode", "question", "timestamp", "second_scorer", "pasted_chars", "request_chars", "words_shared_with_task"],
+      rows.map((r) => [r.id, r.participant, r.order, r.part, r.concept, r.mode, r.question, r.ts, r.secondScorer ? "yes" : "", r.pasted, r.text.length, r.sharedWords]));
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +550,7 @@ export async function readiness(rows: ParticipantSummary[]): Promise<Check[]> {
   if (protocol.strict) add("Study protocol", "ok", "On: the two modes differ only in explaining the idea (up to 3 rounds), the walkthrough, predict then run, and the “what if” question and change to make. Both write code from the same prompt.");
   else add("Study protocol", "warn", "study.strictProtocol is off, so Structured mode also has clarifying questions, prompt tips and the progress panel, which the proposal doesn't describe.");
   if (!protocol.sameCodePrompt) add("Code-writing prompt", "warn", "study.sameCodePrompt is off, so the two modes write code from different prompts. The proposal says they are the same.");
+  if (!protocol.blockPaste) add("Pasting", "warn", "study.blockPaste is off, so participants can paste the task text into the chat box. A pasted task states the input and output, so request scores (H3) would measure copying; the scoring key flags pasted requests.");
 
   // The start screen
   const locked = ["true", "1"].includes(String(cfg.get("lockSettings") ?? ""));

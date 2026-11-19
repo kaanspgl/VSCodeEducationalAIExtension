@@ -92,7 +92,7 @@ export function dispatch(sid: string, cmd: Command) {
   const step = async () => {
     switch (cmd.type) {
       case "begin": return session.begin(String(cmd.participant ?? ""), !!cmd.consent, cmd.level ? String(cmd.level) : undefined);
-      case "send": return session.send(String(cmd.text ?? ""), cmd.target ? String(cmd.target) : undefined);
+      case "send": return session.send(String(cmd.text ?? ""), cmd.target ? String(cmd.target) : undefined, "typed", Math.max(0, Math.round(Number(cmd.pasted) || 0)) || undefined);
       case "action": return session.action(String(cmd.cmd ?? ""), cmd.arg === undefined ? undefined : String(cmd.arg));
       case "quizAnswer": return session.answerQuiz(Number(cmd.choice));
       case "open": await session.open(String(cmd.path)); return session.refresh();

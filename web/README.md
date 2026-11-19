@@ -96,7 +96,7 @@ Quiz links get `?pid=<code>&part=<n>&when=pre|post` added (`when=end` for the qu
 
 In a study-plan session the two modes differ only in what the study describes: explaining the idea before any code (up to 3 rounds of guiding questions), the walkthrough before accepting, predicting the output and then running it, and a "what if" question followed by a change to make. Everything else Structured mode can do outside a study is off: clarifying questions, the prompt tip under each request, plans for big builds and the progress panel. Both modes write code from the same system prompt (the teaching one, which among other things never says what the program prints). Diffs, accept and reject, running programs, and the *Explain this error* and *Explain selection* buttons are the same in both.
 
-`"study.strictProtocol": false` turns the extras back on, and `"study.sameCodePrompt": false` gives regular mode its own plainer prompt. Both are recorded in every session's first log event, with the rest of the settings.
+`"study.strictProtocol": false` turns the extras back on, and `"study.sameCodePrompt": false` gives regular mode its own plainer prompt. In both modes nothing can be pasted or dropped into the chat box (the box says so, and each attempt is logged as `paste_blocked`): the task text names the program's input and output, so a pasted request would score as a complete description (H3). `"study.blockPaste": false` allows pasting again. All three are recorded in every session's first log event, with the rest of the settings.
 
 ### The summary CSV
 
@@ -107,16 +107,16 @@ One line per participant and part. The columns follow the study's measures:
 | Which mode, in which order | `order_group`, `part`, `concept`, `mode` |
 | Tasks reached in the suggested time | `question_reached`, `question_reached_in_time`, `tasks_with_code_accepted`, `tasks_with_code_accepted_in_time` |
 | Time | `part_seconds` (first task to *Finish part*), `active_seconds` (gaps over five minutes left out), `ai_wait_seconds`, `active_seconds_without_ai_wait` |
-| Code viewed before accepting | `changes_accepted`, `accepted_after_viewing_code` |
-| What the participant chose to do | `questions_about_code` (requests answered without a code change), `program_runs`, `own_edits`, `changes_rejected` |
+| Code viewed before accepting | `changes_accepted`, `accepted_after_viewing_code` (either way), `accepted_after_opening_diff` (the participant's choice), `accepted_after_walkthrough` (required in Structured mode) |
+| What the participant chose to do (H2) | `questions_about_code` (requests answered without a code change), of which `questions_in_walkthrough` and `questions_during_modify`; `program_runs`, of which `program_runs_during_modify`; `own_edits`; `changes_rejected` |
 | Explaining the idea | `ideas_unaided`, `ideas_scaffolded`, `ideas_skipped` |
-| Prediction and modification | `predictions_right`, `predictions_total`, `predictions_skipped`, `modify_done`, `modify_given` |
-| The platform's checks on its own items | `quiz_items_verified`, `quiz_items_corrected`, `quiz_items_dropped`, `modify_tasks_verified`, `modify_tasks_dropped` |
+| Prediction and modification | `predictions_right` (exact, or judged right by the model), `predictions_exact`, `predictions_total`, `predictions_skipped`, `modify_done`, `modify_given` |
+| The platform's checks on its own items | `quiz_items_verified`, `quiz_items_corrected`, `quiz_items_dropped`, `quiz_items_unverified` (shown without a run check), `modify_tasks_verified`, `modify_tasks_dropped` |
 | Configuration | `config` (the fingerprint each session ran with) |
 
-What Structured mode requires is kept out of the "chose to do" columns: the run inside *Predict*, and edits or requests made while a *Modify* challenge is open (`duringChallenge` in the log). `own_edits` counts bursts of typing: edits to a file within 30 seconds of each other count once.
+The steps Structured mode requires leave no trace in the H2 columns: the run inside *Predict* is the platform's, the walkthrough and the check question have their own events, and edits made while a *Modify* challenge is open aren't in `own_edits` (`duringChallenge` in the log). Runs and questions during the walkthrough or a *Modify* challenge are the participant's choice but happen inside a required step, so they are counted in the totals and again in their own columns: subtract them for the strict reading of H2 (runs during *Modify* test the required change). `own_edits` counts bursts of typing: edits to a file within 30 seconds of each other count once. `questions_about_code` is decided by the reply: a request for a program that the AI answered without code would count too, so read the logged replies in the pilot.
 
-**Requests to score** has the first request each participant typed for each task that asked for a program, in an order that says nothing about who or when, without the participant or the mode, and with empty columns for the three scores. A fixed pseudo-random fifth is marked for the second scorer. **Scoring key** maps each row back to its participant, part and mode.
+**Requests to score** has the first request each participant typed for each task that asked for a program, in an order that says nothing about who or when, without the participant or the mode, and with empty columns for the three scores. A fixed pseudo-random fifth is marked for the second scorer. **Scoring key** maps each row back to its participant, part and mode, and flags copying: `pasted_chars` (characters pasted into the chat box that are still in the request; always 0 while `study.blockPaste` is on), `request_chars` and `words_shared_with_task` (the longest run of words the request shares with the task text, which also catches a task typed out word for word). A request copied from the task states the input and output because the task does, not because the participant described them. `pastes_blocked` in the summary counts attempts to paste.
 
 The admin password is checked on the server, sign-in is held for a minute after five wrong tries, and the page is signed out when the password changes. Serve the app over HTTPS if it is reachable from outside the lab: the password and the participants' work travel over the same connection.
 

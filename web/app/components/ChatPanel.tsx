@@ -23,12 +23,27 @@ export function ChatPanel({ view }: { view: VibeView }) {
     if (log && atBottom.current) log.scrollTop = log.scrollHeight;
   }, [view.messages.length, view.busy, view.messages[view.messages.length - 1]?.text]);
 
+  // What was pasted into the box since the last send. Only what is still in the message counts, so a paste that
+  // was deleted again doesn't mark a request typed in the participant's own words.
+  const pastes = useRef<string[]>([]);
+  // In a study (study.blockPaste) nothing can be pasted or dropped in: requests are scored for how completely the
+  // participant describes the program, and the task text already names its input and output.
+  const [pasteRefused, setPasteRefused] = useState(false);
+  const takeText = (e: { preventDefault(): void }, pasted: string) => {
+    if (!view.ui.noPaste) { if (pasted) pastes.current.push(pasted); return; }
+    e.preventDefault();
+    setPasteRefused(true);
+    action("pasteBlocked", String(pasted.length));
+  };
   const send = () => {
     const t = text.trim();
     if (!t || !view.inputEnabled) return;
+    const pasted = pastes.current.map((p) => p.trim()).filter((p) => p && t.includes(p)).reduce((n, p) => n + p.length, 0);
+    pastes.current = [];
+    setPasteRefused(false);
     setText("");
     atBottom.current = true;
-    post({ type: "send", text: t, target: view.target });
+    post({ type: "send", text: t, target: view.target, ...(pasted ? { pasted: Math.min(pasted, t.length) } : {}) });
   };
 
   const learn = view.level !== "off";
@@ -163,10 +178,14 @@ export function ChatPanel({ view }: { view: VibeView }) {
           <div className="composer-row">
             <textarea value={text} disabled={!view.inputEnabled} placeholder={view.placeholder} aria-label="Message to VibeLearner"
               onChange={(e) => setText(e.target.value)}
+              onPaste={(e) => takeText(e, e.clipboardData.getData("text"))}
+              onDrop={(e) => takeText(e, e.dataTransfer.getData("text"))}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
             <button className={`btn ${boxOpen ? "secondary" : ""}`} disabled={!view.inputEnabled || !text.trim()} onClick={send}><Icon name="send" size={15} /> Send</button>
           </div>
-          <span className="hint">Enter to send · Shift+Enter for a new line</span>
+          {pasteRefused && view.ui.noPaste
+            ? <span className="hint" role="status">Pasting is turned off here. Describe what you want in your own words.</span>
+            : <span className="hint">Enter to send · Shift+Enter for a new line</span>}
         </div>
       </main>
     </section>

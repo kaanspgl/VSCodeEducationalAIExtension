@@ -150,6 +150,7 @@ export class VibeSession {
   private planBuilds = true;
   private progressPanel = true;
   private sameCodePrompt = false;
+  private blockPaste = false;
   /** When the current wait for the system started (model calls, runs), for the log. */
   private busySince: number | undefined;
   private model = "";
@@ -261,7 +262,7 @@ export class VibeSession {
         maxRoundsPerStep: this.maxRoundsPerStep, allowSkipSteps: this.allowSkipSteps, requireSteps: this.requireSteps, questionsPerChange: this.perChange,
         projectQuizQuestions: this.projectQuizCount, contextMaxChars: this.maxChars,
         strictProtocol: protocol.strict, promptTips: this.promptTips, planLargeBuilds: this.planBuilds, progressPanel: this.progressPanel,
-        sameCodePrompt: this.sameCodePrompt, configHash: this.study ? studyFingerprint(cfg, studyParts).hash : undefined, continued,
+        sameCodePrompt: this.sameCodePrompt, blockPaste: this.blockPaste, configHash: this.study ? studyFingerprint(cfg, studyParts).hash : undefined, continued,
       });
     }
     // A participant keeps their files across visits; anyone else gets a folder for this browser.
@@ -298,6 +299,7 @@ export class VibeSession {
     this.planBuilds = p.planLargeBuilds;
     this.progressPanel = p.progressPanel;
     this.sameCodePrompt = p.sameCodePrompt;
+    this.blockPaste = p.blockPaste;
   }
 
   /**
@@ -397,8 +399,11 @@ export class VibeSession {
 
   // ================================================================== chat
 
-  /** `source` is how the request was made: typed by the participant, or sent by an Explain button. */
-  async send(raw: string, target?: string, source: "typed" | "explain_error" | "explain_selection" = "typed") {
+  /**
+   * `source` is how the request was made: typed by the participant, or sent by an Explain button. `pasted` is how
+   * many of its characters were pasted in (e.g. the task text), for scoring requests (H3).
+   */
+  async send(raw: string, target?: string, source: "typed" | "explain_error" | "explain_selection" = "typed", pasted?: number) {
     if (target !== undefined) this.setTarget(target);
     const text = raw.trim();
     if (!text || this.view.busy || this.view.stage !== "chat" || this.quiz) return;
@@ -424,7 +429,7 @@ export class VibeSession {
     const challenge = this.openChallenge();
     this.logger.log("vibe_request", undefined, {
       text, active: ctx.active, selection: ctx.selection && { path: ctx.selection.path, start: ctx.selection.startLine, end: ctx.selection.endLine },
-      files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour, source,
+      files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour, source, pasted: pasted || undefined,
       // Asking the AI to make the change is one way to do a Modify challenge: part of a required step, not an extra request.
       duringChallenge: challenge || undefined,
     });
@@ -498,6 +503,8 @@ export class VibeSession {
 
   private async act(request: string, ctx: ProjectContext, opts: ActOpts, student?: { idea?: string; steps?: string }) {
     this.lastRequest = { text: request, opts, student };
+    // Asked inside a step Structured mode requires: the summary counts these questions separately (H2).
+    const during = { inTour: !!this.tour || undefined, duringChallenge: this.openChallenge() || undefined };
     this.setBusy(true, opts.planStep !== undefined ? `Building step ${opts.planStep + 1}…` : "Working on it…");
     const pText = this.plan && opts.planStep !== undefined ? P.planText(this.plan, opts.planStep, !!opts.planAll) : undefined;
     const res = await callBackend({
@@ -545,7 +552,7 @@ export class VibeSession {
     this.logger.log("vibe_reply", undefined, {
       text: shown, concepts, blocks: blocks.length, fencedFallback: usedFallback, planStep: opts.planStep, raw: res.text.slice(0, 4000),
       changes: cards.map((c) => ({ id: c.id, path: c.path, status: c.status, added: c.added, removed: c.removed, isNew: c.isNew })),
-      answerOnly: opts.answerOnly || undefined, unnamedPlaced: loose.blocks.length || undefined, droppedBlocks: dropped || undefined,
+      answerOnly: opts.answerOnly || undefined, unnamedPlaced: loose.blocks.length || undefined, droppedBlocks: dropped || undefined, ...during,
     }, res.ms);
 
     const hint = cards.some((c) => c.status === "pending") && this.level === "guided" && opts.structured
@@ -870,6 +877,8 @@ export class VibeSession {
         case "skipQuiz": await this.endQuiz(true); break;
         case "explainError": await this.explainError(Number(a)); break;
         case "explainSelection": await this.explainSelection(); break;
+        // The chat box refused a paste (study.blockPaste): who tried, and how much, for interpreting H3.
+        case "pasteBlocked": this.logger.log("vibe_input", undefined, { kind: "paste_blocked", chars: Math.max(0, Math.round(Number(a) || 0)) }); break;
         case "runFile": await this.runActiveFile(a); break;
         case "setTarget": this.setTarget(a); break;
         case "setLevel": this.setLevel(a); break;
@@ -1184,7 +1193,9 @@ export class VibeSession {
     this.say("student", text);
     const p = this.proposals.get(a.id)!;
 
-    let correct = norm(text) === norm(a.truth);
+    // Exact (after normalising spaces) is objective; otherwise the model judges whether the guess is right in substance.
+    const exact = norm(text) === norm(a.truth);
+    let correct = exact;
     let feedback = "Spot on — that's exactly what it prints.";
     if (!correct) {
       this.setBusy(true, "Running it and comparing…");
@@ -1199,7 +1210,7 @@ export class VibeSession {
     }
     this.stats.predTotal++;
     if (correct) this.stats.predRight++;
-    this.logger.log("vibe_learn", undefined, { kind: "predict_answer", id: a.id, prediction: text, actual: a.truth, correct, feedback });
+    this.logger.log("vibe_learn", undefined, { kind: "predict_answer", id: a.id, prediction: text, actual: a.truth, correct, exact, judgedBy: exact ? "exact" : "model", feedback });
     this.say("tutor", `${correct ? "✅" : "🔍"} ${feedback}\n\n**What it actually printed:**\n\`\`\`\n${a.truth}\n\`\`\``);
     await this.markStage(a.id, "predict", "done");
   }
@@ -1247,7 +1258,12 @@ export class VibeSession {
     const kept: Mcq[] = [];
     const current = qs.some((q) => q.change) ? (await this.runWithEdit(p, undefined)).output : undefined;
     for (const q of qs) {
-      if (!q.change) { kept.push(q); continue; }
+      if (!q.change) {
+        // Not a "what would it print" question, so running can't check its key: shown as the model wrote it.
+        this.logger.log("vibe_learn", undefined, { kind: "question_unverified", id: p.id, stem: q.stem, reason: "no change to run", aiKey: q.correct });
+        kept.push(q);
+        continue;
+      }
       const out = await this.runWithEdit(p, q.change);
       const actual = out.output;
       if (actual === undefined || actual.length > 200) {
@@ -1592,7 +1608,11 @@ export class VibeSession {
     this.setBusy(true, "Running…");
     const run = await runFile(lang, file, input, this.runTarget);
     this.setBusy(false);
-    this.logger.log("program_run", undefined, { via: "panel", file: rel, stdin: input, stdout: run.stdout, stderr: run.stderr, timedOut: run.timedOut, error: run.error });
+    this.logger.log("program_run", undefined, {
+      via: "panel", file: rel, stdin: input, stdout: run.stdout, stderr: run.stderr, timedOut: run.timedOut, error: run.error,
+      // A run while a Modify challenge on this file is open tests the change it asks for: part of a required step (H2).
+      duringChallenge: this.openChallenge(rel) || undefined, inTour: !!this.tour || undefined,
+    });
     if (run.error) { this.say("system", `I can't run it here: ${run.error}`); return; }
     if (run.timedOut) { this.say("system", `\`${rel}\` didn't finish within 8 seconds — is there a loop that never ends, or does it need more input?`); return; }
     this.say("system", `▶ Output of \`${rel}\`${input ? " (with your input)" : ""}:\n\`\`\`\n${run.stdout.replace(/\s+$/, "") || "(nothing printed)"}\n\`\`\``);
@@ -1806,7 +1826,7 @@ export class VibeSession {
     v.target = this.target;
     v.levelLocked = v.logging;
     // Participants aren't told which version they are using in each part, so a research session doesn't name the mode.
-    v.ui = { mode: !v.logging, progress: this.progressPanel };
+    v.ui = { mode: !v.logging, progress: this.progressPanel, noPaste: this.blockPaste };
     const st = this.study;
     v.study = !st ? undefined : st.prog.part >= st.parts.length
       ? { part: st.parts.length, parts: st.parts.length, concept: "", step: "done", tasks: [], task: 0, minutes: 0, url: st.endUrl ? quizUrl(st.endUrl, st.code, 0, "end") : undefined }
