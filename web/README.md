@@ -25,11 +25,11 @@ Providers: `ollama` (default), `eduai` (UBC's campus models; set `eduai.model`),
 
 The easiest way to switch is the **Model** section on the start screen: pick Ollama, EduAI, OpenRouter or Gemini, choose a model and paste a key. It writes to `vibelearner.config.json` (git ignores it) and never sends a saved key back to the browser. The section only appears when you open the app on the machine running the server (`localhost`), never for participants on other machines (also not behind a reverse proxy such as Apache, where every request arrives as `localhost`), and never at `/study`. Set `"lockSettings": true` to turn it off completely on a study machine.
 
-No money needed: OpenRouter's models ending in `:free` cost nothing (make a free account at openrouter.ai and create a key), but they have a daily request limit and the list changes, so the start screen shows the current ones. Google AI Studio keys have a free tier too.
+No money needed: OpenRouter's models ending in `:free` cost nothing (make a free account at openrouter.ai and create a key), but they have a daily request limit and the list changes, so the start screen shows the current ones. Google AI Studio keys have a free tier too (create one at aistudio.google.com/apikey); the default `gemini.model` is `gemini-3.1-flash-lite`, because the full Flash models are often busy on the free tier. Each call to Gemini waits at most 90 s and retries busy answers within 3 minutes. On the free tier Google may use what is sent to improve its products and people may read it, so use Gemini (and OpenRouter) only to try the app out, never with participants: the proposal keeps their data on UBC computers.
 
 To show the app inside another site's page (a hosted preview, a demo in a frame), start it with `VL_EMBEDDED=1`: its cookies are then sent inside the frame, over HTTPS or localhost only. Never use that for a study; the researcher page flags it.
 
-Secrets and a few settings can come from environment variables instead (they win over the config file): `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `EDUAI_API_KEY`, `EDUAI_MODEL`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`, `VL_DATA_DIR`, `VL_CONFIG`.
+Secrets and a few settings can come from environment variables instead (they win over the config file): `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `EDUAI_API_KEY`, `EDUAI_MODEL`, `VL_PROVIDER`, `VL_MODEL`, `VL_LEVEL`, `OLLAMA_URL`, `OPENAI_BASE_URL`, `VL_PYTHON`, `VL_JUDGE0_URL`, `VL_JUDGE0_TOKEN`, `VL_DATA_DIR`, `VL_CONFIG`.
 
 ### EduAI
 

@@ -1,6 +1,7 @@
 import type { ModelSettings, ProviderInfo } from "~/lib/types";
 import { envOverride, loadSettings, saveSettings, type Settings } from "./config";
 import { EDUAI_CONTEXT } from "./eduai";
+import { GEMINI_SUGGESTED } from "./gemini";
 import { modelChoice, modelKeyFor } from "./llm";
 
 /**
@@ -51,9 +52,9 @@ export async function readModelSettings(): Promise<ModelSettings> {
       info.keyUrl = "https://my.eduai.ok.ubc.ca";
       info.note = "UBC's campus models: nothing leaves UBC. You need API access from an EduAI administrator; then create a key in EduAI's Settings, then API Keys. Off campus, connect to the UBC VPN. The key allows 200 requests and 200,000 tokens a day by default, and VibeLearner makes a few requests per message.";
     } else if (id === "gemini") {
-      info.suggestions = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
+      info.suggestions = GEMINI_SUGGESTED;
       info.keyUrl = "https://aistudio.google.com/apikey";
-      info.note = "Google AI Studio keys have a free tier.";
+      info.note = "Google AI Studio keys have a free tier, but on it Google may use what is sent to improve its products: for trying the app out, never with participants. The full Flash models are often busy; the Flash-Lite ones answer more reliably.";
     }
     return info;
   });

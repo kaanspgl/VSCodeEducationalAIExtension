@@ -1,5 +1,6 @@
 import type { Settings } from "./config";
 import { EDUAI_ENDPOINT, eduaiComplete } from "./eduai";
+import { geminiComplete } from "./gemini";
 import { mockReply } from "./mock";
 
 export type ChatMsg = { role: "user" | "assistant"; content: string };
@@ -67,24 +68,14 @@ async function route(args: CallArgs): Promise<{ text: string; provider: string }
   }
 
   if (provider === "gemini") {
-    const key = cfg.get<string>("gemini.apiKey") || "";
-    if (!key) throw new Error("Gemini API key missing.");
-    const body: any = {
-      contents: [
-        ...history.map((h) => ({ role: h.role === "assistant" ? "model" : "user", parts: [{ text: h.content }] })),
-        { role: "user", parts: [{ text: args.prompt }] },
-      ],
-      generationConfig: { temperature },
-    };
-    if (args.system) body.systemInstruction = { role: "system", parts: [{ text: args.system }] };
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify(body),
+    const text = await geminiComplete({
+      apiKey: cfg.get<string>("gemini.apiKey") || "",
+      model,
+      system: args.system,
+      messages: [...history, { role: "user", content: args.prompt }],
+      temperature,
     });
-    if (!res.ok) throw new Error(`Gemini Error (${res.status}): ${await res.text()}`);
-    const json: any = await res.json();
-    return { text: json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "", provider };
+    return { text, provider };
   }
 
   const messages = [

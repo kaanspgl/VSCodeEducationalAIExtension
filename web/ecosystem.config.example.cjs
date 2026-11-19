@@ -36,7 +36,10 @@ module.exports = {
                 EDUAI_MODEL: "",            // empty: vllm:qwen3.8-27b-instruct (65,536-token window); or vllm:qwen3.5-9b-instruct / -2b- (16,384)
                 OPENAI_API_KEY: "",
                 OPENAI_BASE_URL: "",
+                // Gemini (Google AI Studio key) is for trying the app out only: what is typed goes to Google, and
+                // the proposal keeps participants' data on UBC computers. Switch back to eduai before participants.
                 GEMINI_API_KEY: "",
+                GEMINI_MODEL: "",           // empty: gemini-3.1-flash-lite
 
                 // Participants' programs run on Judge0 in Docker (judge0/setup.sh prints the token), never on this
                 // server itself. deploy.sh won't deploy without both.

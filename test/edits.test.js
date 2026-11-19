@@ -158,6 +158,20 @@ test('a new-file block with no path anywhere becomes plain fenced code, never a 
   assert.deepEqual(blocks, [{ path: 'main.py', search: '', replace: '# Print numbers 1 to 5\nfor i in range(1, 6):\n    print(i)\n' }]);
 });
 
+// From a Gemini 3.1 Flash Lite run: the file named only in a comment inside the block, and no fence around it.
+test('a new-file block with no path and no fence still becomes the file it names', () => {
+  const text = 'Summary: I am creating `question1.py`.\n\n<<<<<<< SEARCH\n=======\n# question1.py\n\ntotal = 0\nfor number in range(1, 51):\n    total = total + number\n\nprint(total)\n>>>>>>> REPLACE\n\nThe program starts a total at 0.';
+  const parsed = parseBlocks(text);
+  assert.equal(parsed.blocks.length, 0);
+  const { blocks, rest } = fencedToBlocks(parsed.rest, new Set());
+  assert.deepEqual(blocks, [{ path: 'question1.py', search: '', replace: '# question1.py\n\ntotal = 0\nfor number in range(1, 51):\n    total = total + number\n\nprint(total)\n' }]);
+  assert.doesNotMatch(rest, /total = 0|SEARCH|REPLACE/);
+  assert.match(rest, /starts a total at 0/);
+  // With no file named anywhere, the file the session is writing (passed as `active`) gets it.
+  const plain = parseBlocks('<<<<<<< SEARCH\n=======\nfor i in range(3):\n    print(i)\nprint("done")\n>>>>>>> REPLACE');
+  assert.deepEqual(fencedToBlocks(plain.rest, new Set(), { path: 'question2.py', content: '' }).blocks.map(b => b.path), ['question2.py']);
+});
+
 test('fencedToBlocks never turns an unreadable edit block into file content', () => {
   const text = `${FENCE}python\n<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE\n${FENCE}`;
   assert.equal(parseBlocks(text).blocks.length, 0);

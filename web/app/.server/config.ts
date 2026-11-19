@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { EDUAI_DEFAULT_MODEL, EDUAI_ENDPOINT } from "./eduai";
+import { GEMINI_DEFAULT_MODEL } from "./gemini";
 
 /**
  * Settings use the same keys as the VS Code extension's settings (with or without the "vibelearner." prefix),
@@ -20,7 +21,8 @@ const DEFAULTS: Record<string, unknown> = {
   // Free OpenRouter models end in ":free" and come and go; the start screen lists the current ones.
   "openrouter.model": "poolside/laguna-s-2.1:free",
   "gemini.apiKey": "",
-  "gemini.model": "gemini-2.5-flash",
+  // Google AI Studio's models (see gemini.ts): for trying the app out only, never with participants.
+  "gemini.model": GEMINI_DEFAULT_MODEL,
   // UBC EduAI's campus models (see eduai.ts). The key comes from EduAI's Settings, then API Keys.
   eduaiEndpoint: EDUAI_ENDPOINT,
   eduaiApiKey: "",
@@ -73,6 +75,7 @@ const FROM_ENV: Record<string, string> = {
   OPENAI_BASE_URL: "openaiBaseUrl",
   OPENROUTER_API_KEY: "openrouterApiKey",
   GEMINI_API_KEY: "gemini.apiKey",
+  GEMINI_MODEL: "gemini.model",
   EDUAI_API_KEY: "eduaiApiKey",
   EDUAI_MODEL: "eduai.model",
 };

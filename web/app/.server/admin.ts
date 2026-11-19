@@ -547,6 +547,7 @@ export async function readiness(rows: ParticipantSummary[]): Promise<Check[]> {
     else if (!model.startsWith("vllm:")) add("AI model", "fail", `EduAI only runs campus models, whose names start with “vllm:”, not “${model}”. Set eduai.model (or EDUAI_MODEL).`);
     else add("AI model", "ok", `EduAI on UBC's campus servers, model ${model}${window ? ` (${window.toLocaleString("en")}-token window)` : ""}. Every participant shares the key's daily allowance (by default 200 requests and 200,000 tokens in any 24 hours): check “Your API access” in EduAI's Settings, then API Keys, and press “Test the model” before each day of sessions.`);
   } else if (provider === "ollama") add("AI model", "ok", `Ollama at ${cfg.get("ollamaUrl")}, model ${model}: it runs on this server. Press “Test the model” before each day of sessions.`);
+  else if (provider === "gemini") add("AI model", "warn", `Google Gemini, model ${model}: for trying the app out only. What is typed goes to Google, and on the free tier Google may use it to improve its products and people may read it. The proposal says the model runs on a UBC-managed computer and nothing goes to third-party AI providers, so switch back to EduAI before any participant session.`);
   else add("AI model", "warn", `${provider}, model ${model}: what participants type is sent to an outside provider. The proposal says the model runs on a UBC-managed computer and nothing goes to third-party AI providers.`);
 
   // Running programs: on Judge0 if it's set up, else with this machine's Python

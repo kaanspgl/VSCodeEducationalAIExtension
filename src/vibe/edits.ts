@@ -23,8 +23,11 @@ export function parseBlocks(text: string): { blocks: EditBlock[]; rest: string }
         blocks.push({ path, search, replace });
         return '';
       }
-      // No path anywhere: hand a new file's code, without the markers, to the fenced-code fallback to name.
-      return search.trim() ? whole : replace;
+      // No path anywhere: hand a new file's code, without the markers, to the fenced-code fallback to name. That
+      // fallback only reads fenced code, so a block the model didn't put inside a fence gets one.
+      if (search.trim()) return whole;
+      const insideFence = ((all.slice(0, at).match(/```/g) ?? []).length) % 2 === 1;
+      return insideFence ? replace : '```\n' + replace + '\n```';
     })
     // drop fences the model wrapped around now-removed blocks
     .replace(/```[a-zA-Z]*\s*```/g, '')
