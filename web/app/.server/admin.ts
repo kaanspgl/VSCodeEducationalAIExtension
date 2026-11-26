@@ -108,6 +108,8 @@ export type ParticipantSummary = {
   predictRight: number;
   /** Predictions that matched the output exactly (spacing aside), without the model's judgement. */
   predictExact: number;
+  /** Right predictions that gave a printed number as a calculation ("1 + 2 + … + 50" for 1275), worked out by the platform. */
+  predictCalc: number;
   /** Predictions that named none of the printed numbers ("the total"): counted as not right, whatever the model said. */
   predictVague: number;
   predictTotal: number;
@@ -147,7 +149,7 @@ export type ParticipantSummary = {
 const blank = (code: string): ParticipantSummary => ({
   code, conditions: [], sessions: 0, activeSec: 0, waitSec: 0, modelSec: 0, events: 0, requests: 0, questionsAsked: 0, questionsInTour: 0, questionsDuringModify: 0,
   ideasUnaided: 0, ideasScaffolded: 0, ideasSkipped: 0, accepted: 0, acceptedViewed: 0, acceptedDiffOpened: 0, acceptedToured: 0, rejected: 0, selfEdits: 0,
-  questionReached: 0, tasksWithCode: 0, predictRight: 0, predictExact: 0, predictVague: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0,
+  questionReached: 0, tasksWithCode: 0, predictRight: 0, predictExact: 0, predictCalc: 0, predictVague: 0, predictTotal: 0, predictSkipped: 0, questionsRight: 0, questionsTotal: 0, modifyDone: 0,
   modifyGiven: 0, itemsVerified: 0, itemsCorrected: 0, itemsDropped: 0, itemsUnverified: 0, challengesVerified: 0, challengesDropped: 0, runs: 0, runsDuringModify: 0,
   pastesBlocked: 0, errors: 0, configs: [],
 });
@@ -224,7 +226,7 @@ function count(k: Tally, e: any, timed = true) {
       if (typeof d.chosen === "number") { s.questionsTotal++; if (d.correct) s.questionsRight++; }
       break;
     case "vibe_learn":
-      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; if (d.exact) s.predictExact++; if (d.vague) s.predictVague++; }
+      if (d.kind === "predict_answer") { s.predictTotal++; if (d.correct) s.predictRight++; if (d.exact) s.predictExact++; if (d.correct && d.valueByCalculation) s.predictCalc++; if (d.vague) s.predictVague++; }
       else if (d.kind === "question_unverified") s.itemsUnverified++;
       else if (d.kind === "stage" && d.stage === "predict" && d.status === "skipped") s.predictSkipped++;
       else if (d.kind === "challenge_start") s.modifyGiven++;
@@ -352,6 +354,7 @@ const COLUMNS: [string, (s: ParticipantSummary) => string | number][] = [
   ["ideas_skipped", (s) => s.ideasSkipped],
   ["predictions_right", (s) => s.predictRight],
   ["predictions_exact", (s) => s.predictExact],
+  ["predictions_by_calculation", (s) => s.predictCalc],
   ["predictions_without_a_value", (s) => s.predictVague],
   ["predictions_total", (s) => s.predictTotal],
   ["predictions_skipped", (s) => s.predictSkipped],

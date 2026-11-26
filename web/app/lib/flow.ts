@@ -105,7 +105,11 @@ export function nowCard(view: VibeView): Now | undefined {
   }
   if (view.awaiting === "gate") return { title: "Explain your idea", text: "Reply in the chat, in your own words: how will the program work?", where: "chat" };
   if (view.awaiting === "predict") {
-    return { title: "Predict what it prints", text: "Read the code, then type your guess in the chat. After that it runs, so you can compare.", where: "chat" };
+    return {
+      title: "Predict what it prints",
+      text: "Read the code, then type your guess in the chat. A number that takes long to work out can be written as the calculation that gives it, like 2 + 4 + … + 20. After that it runs, so you can compare.",
+      where: "chat",
+    };
   }
   const st = view.structured;
   const card = findChange(view, st?.changeId);

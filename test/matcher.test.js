@@ -164,6 +164,47 @@ test('a prediction that names none of the printed numbers is not a correct predi
   assert.equal(namesNoOutputNumber('it says hello', 'hello'), false);
 });
 
+const { findCalculations, workOutPrediction } = require('../out/vibe/checks');
+const calcs = (s) => findCalculations(s).map((c) => [c.text, c.value]);
+
+test('a calculation in a prediction is worked out, including what "…" stands for', () => {
+  assert.deepEqual(calcs('1 + 2 + ... + 50'), [['1 + 2 + ... + 50', 1275]]);
+  assert.deepEqual(calcs('it prints 1+2+…+50'), [['1+2+…+50', 1275]]);
+  assert.deepEqual(calcs('2 + 4 + … + 20'), [['2 + 4 + … + 20', 110]]); // the step comes from the terms before "…"
+  assert.deepEqual(calcs('7 + 14 + ... + 98'), [['7 + 14 + ... + 98', 735]]);
+  assert.deepEqual(calcs('1 + ... + 10'), [['1 + ... + 10', 55]]);
+  assert.deepEqual(calcs('1 * 2 * ... * 5'), [['1 * 2 * ... * 5', 120]]);
+  assert.deepEqual(calcs('50 × 51 ÷ 2'), [['50 × 51 ÷ 2', 1275]]);
+  assert.deepEqual(calcs('(3 + 4) * 2 = 14'), [['(3 + 4) * 2', 14]]);
+  assert.deepEqual(calcs('6 x 7'), [['6 x 7', 42]]);
+  assert.deepEqual(calcs('(it prints 1 + 2)'), [['1 + 2', 3]]);
+});
+
+test('ranges, unfinished series, words and plain numbers are not calculations', () => {
+  assert.deepEqual(calcs('the numbers 1-50'), []);
+  assert.deepEqual(calcs('from 1 - 50'), []);
+  assert.deepEqual(calcs('1 + 2 + 3 + …'), []);
+  assert.deepEqual(calcs('1 + 2 + … + 50.5'), []); // a series must step to its last term
+  assert.deepEqual(calcs('3 + 5 + … + 10'), []);
+  assert.deepEqual(calcs('the sum of all the numbers from 1 to 50'), []);
+  assert.deepEqual(calcs('it prints 1275.'), []);
+  assert.deepEqual(calcs('Python 3.13.14'), []);
+});
+
+test('a prediction that gives the printed number as a calculation is exact once worked out', () => {
+  const r = workOutPrediction('The sum of numbers from 1 to 50 is: 1 + 2 + … + 50', 'The sum of numbers from 1 to 50 is: 1275');
+  assert.equal(r.worked, 'The sum of numbers from 1 to 50 is: 1275');
+  assert.deepEqual(r.calculations, [{ text: '1 + 2 + … + 50', value: '1275' }]);
+  assert.equal(r.givesOutput, true);
+  // Off by one: the loop stops at 49, and the calculation says so.
+  assert.equal(workOutPrediction('1 + 2 + … + 49', '1275').givesOutput, false);
+  // Lines of a times table are written out already: the calculations aren't standing in for a printed number.
+  assert.equal(workOutPrediction('6 x 1 = 6\n6 x 2 = 12', '6 x 1 = 6\n6 x 2 = 12').givesOutput, false);
+  assert.equal(workOutPrediction('it prints 1275', '1275'), undefined);
+  // Words still name no printed number.
+  assert.equal(namesNoOutputNumber(workOutPrediction('it adds 1 + 2 + … + 50', '1275').worked, '1275'), false);
+});
+
 test('questions about the code are told apart from change requests', () => {
   assert.equal(isPlainQuestion('why is it 51 and not 50'), true);
   assert.equal(isPlainQuestion('what does range do?'), true);

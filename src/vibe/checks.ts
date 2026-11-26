@@ -157,6 +157,145 @@ export function namesNoOutputNumber(prediction: string, actual: string): boolean
 }
 
 /**
+ * A calculation written in a prediction instead of the number it gives: "1 + 2 + … + 50", "50 × 51 ÷ 2",
+ * "(3 + 4) * 2". Working out 1275 by hand proves nothing about the code, but writing 1 + 2 + … + 50 says exactly
+ * where the loop starts, where it stops and what it does each time round, and it is worked out here, not by
+ * the model, so every participant is held to the same rule. Words ("the sum of 1 to 50") are not a calculation.
+ */
+export type Calculation = { text: string; value: number; start: number; end: number };
+
+type Tok = { t: 'num'; v: number } | { t: 'op'; v: '+' | '-' | '*' | '/' } | { t: '(' } | { t: ')' } | { t: '...' };
+const OPS: Record<string, '+' | '-' | '*' | '/'> = { '+': '+', '-': '-', '−': '-', '*': '*', '×': '*', 'x': '*', 'X': '*', '·': '*', '/': '/', '÷': '/' };
+/** Most terms an ellipsis may stand for. */
+const MAX_TERMS = 100_000;
+
+function tokenize(s: string): Tok[] | undefined {
+  const toks: Tok[] = [];
+  for (let i = 0; i < s.length;) {
+    const rest = s.slice(i);
+    const ws = /^[ \t]+/.exec(rest);
+    const num = /^\d+(?:\.\d+)?/.exec(rest);
+    const dots = /^(?:\.{2,}|…)/.exec(rest);
+    if (ws) i += ws[0].length;
+    else if (num) { toks.push({ t: 'num', v: Number(num[0]) }); i += num[0].length; }
+    else if (dots) { toks.push({ t: '...' }); i += dots[0].length; }
+    else if (rest[0] in OPS) { toks.push({ t: 'op', v: OPS[rest[0]] }); i++; }
+    else if (rest[0] === '(' || rest[0] === ')') { toks.push({ t: rest[0] }); i++; }
+    else return undefined;
+  }
+  return toks;
+}
+
+/** Writes out what each "…" stands for: 1 + 2 + … + 5 is 1 + 2 + 3 + 4 + 5, and 2 + 4 + … + 10 steps by 2. */
+function expandEllipses(toks: Tok[]): Tok[] | undefined {
+  const i = toks.findIndex((t) => t.t === '...');
+  if (i < 0) return toks;
+  const op = toks[i - 1], op2 = toks[i + 1], last = toks[i + 2];
+  if (op?.t !== 'op' || op2?.t !== 'op' || op.v !== op2.v || (op.v !== '+' && op.v !== '*') || last?.t !== 'num') return undefined;
+  // The terms written before the "…", joined by the same operator: they give the first term and the step.
+  const pre: number[] = [];
+  let first = i - 2;
+  for (let j = i - 2; toks[j]?.t === 'num'; j -= 2) {
+    pre.unshift((toks[j] as { v: number }).v);
+    first = j;
+    const before = toks[j - 1];
+    if (before?.t !== 'op' || before.v !== op.v) break;
+  }
+  if (!pre.length || ![...pre, last.v].every(Number.isInteger)) return undefined;
+  const step = pre.length > 1 ? pre[1] - pre[0] : last.v >= pre[0] ? 1 : -1;
+  if (!step || pre.some((v, k) => k > 0 && v - pre[k - 1] !== step)) return undefined;
+  const more = (last.v - pre[pre.length - 1]) / step;
+  if (!Number.isInteger(more) || more < 0 || pre.length + more > MAX_TERMS) return undefined;
+  const terms = [...pre];
+  for (let k = 1; k <= more; k++) terms.push(pre[pre.length - 1] + k * step);
+  const written: Tok[] = terms.flatMap((v, k) => (k ? [op, { t: 'num' as const, v }] : [{ t: 'num' as const, v }]));
+  return expandEllipses([...toks.slice(0, first), ...written, ...toks.slice(i + 3)]);
+}
+
+function evaluate(toks: Tok[]): number | undefined {
+  let i = 0;
+  const isOp = (t: Tok | undefined, ...ops: string[]): t is Extract<Tok, { t: 'op' }> => t?.t === 'op' && ops.includes(t.v);
+  const factor = (): number => {
+    const t = toks[i++];
+    if (t?.t === 'num') return t.v;
+    if (isOp(t, '-')) return -factor();
+    if (t?.t === '(') {
+      const v = sum();
+      if (toks[i++]?.t !== ')') throw new Error('bracket');
+      return v;
+    }
+    throw new Error('operand');
+  };
+  const product = (): number => {
+    let v = factor();
+    for (let t = toks[i]; isOp(t, '*', '/'); t = toks[i]) { i++; v = t.v === '*' ? v * factor() : v / factor(); }
+    return v;
+  };
+  const sum = (): number => {
+    let v = product();
+    for (let t = toks[i]; isOp(t, '+', '-'); t = toks[i]) { i++; v = t.v === '+' ? v + product() : v - product(); }
+    return v;
+  };
+  try {
+    const v = sum();
+    return i === toks.length && Number.isFinite(v) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A number as a program would print it: whole numbers without ".0", others to at most six decimals. */
+export function formatNumber(v: number): string {
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e6) / 1e6);
+}
+
+/**
+ * Every calculation in a text, with what it comes to. A calculation has at least one operator between two
+ * numbers; "1-50" and "1 - 50" read as a range, not a subtraction, and an open-ended "1 + 2 + …" is not one.
+ */
+export function findCalculations(text: string): Calculation[] {
+  const out: Calculation[] = [];
+  for (const m of text.matchAll(/[(\d][\d \t+\-−*×xX·/÷().…]*/g)) {
+    let span = m[0];
+    let start = m.index ?? 0;
+    // A sentence's full stop and a dangling operator or bracket aren't part of it.
+    span = span.replace(/[ \t]+$/, '');
+    if (/(?:\.{2,}|…)$/.test(span)) continue;
+    span = span.replace(/(?<!\.)\.$/, '').replace(/[ \t+\-−*×xX·/÷(]+$/, '');
+    // Brackets around the calculation that it doesn't close, as in "(it prints 1 + 2)".
+    const opens = () => (span.match(/\(/g) ?? []).length - (span.match(/\)/g) ?? []).length;
+    while (opens() < 0 && span.endsWith(')')) span = span.slice(0, -1).replace(/[ \t]+$/, '');
+    while (opens() > 0 && span.startsWith('(')) { span = span.slice(1).replace(/^[ \t]+/, ''); start = text.indexOf(span, start); }
+    if (opens() !== 0 || /^\d+[ \t]*[-−–][ \t]*\d+$/.test(span)) continue;
+    const toks = tokenize(span);
+    const binary = toks?.some((t, k) => t.t === 'op' && (toks[k - 1]?.t === 'num' || toks[k - 1]?.t === ')'));
+    if (!toks || !binary) continue;
+    const expanded = expandEllipses(toks);
+    const value = expanded && evaluate(expanded);
+    if (value !== undefined) out.push({ text: span, value, start, end: start + span.length });
+  }
+  return out;
+}
+
+/**
+ * The prediction with each calculation replaced by what it comes to ("is: 0 + 1 + … + 100" becomes "is: 5050"),
+ * the calculations, and whether one of them gives a printed number that the prediction doesn't write out
+ * itself: then the value was given as a calculation. Undefined when there are no calculations.
+ */
+export function workOutPrediction(prediction: string, actual: string):
+  { worked: string; calculations: { text: string; value: string }[]; givesOutput: boolean } | undefined {
+  const calcs = findCalculations(prediction);
+  if (!calcs.length) return undefined;
+  let worked = prediction;
+  for (const c of [...calcs].reverse()) worked = worked.slice(0, c.start) + formatNumber(c.value) + worked.slice(c.end);
+  const nums = (s: string) => new Set((s.replace(/(\d),(?=\d{3}\b)/g, '$1').match(/-?\d+(?:\.\d+)?/g) ?? []).map((n) => formatNumber(Number(n))));
+  const printed = nums(actual);
+  const written = nums(prediction);
+  const givesOutput = calcs.some((c) => printed.has(formatNumber(c.value)) && !written.has(formatNumber(c.value)));
+  return { worked, calculations: calcs.map((c) => ({ text: c.text, value: formatNumber(c.value) })), givesOutput };
+}
+
+/**
  * A question about the code rather than a request to change it: "why is it 51 and not 50", "what does range do?",
  * "how does the loop stop". Asking for a change, even as a question ("can you make it go to 100?"), is not one.
  */

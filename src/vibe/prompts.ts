@@ -16,7 +16,7 @@
  *   guided : structured vibe coding (treatment): Steps 1-3 run for every request that needs programming logic.
  * Freeze these prompts (and model + settings) before collecting data. The version goes in the log.
  */
-export const VIBE_PROMPT_VERSION = 'vibe-v7-2026-11';
+export const VIBE_PROMPT_VERSION = 'vibe-v8-2026-11';
 
 export type Level = 'off' | 'light' | 'guided';
 
@@ -309,12 +309,15 @@ export const PREDICT_FEEDBACK_SYSTEM = [
   'A beginner predicted what their program prints. You get the code, the input, the ACTUAL output (ground truth) and their prediction.',
   'Write the feedback TO the student as "you" ("You spotted…"), never about "the student".',
   '- correct: true if the prediction matches the actual output in substance. Ignore formatting differences such as spacing, brackets, quotes, commas or capitalisation. A prediction must say what is shown: one that only describes what the program works out ("the total", "the sum of the numbers") without the value is NOT correct.',
-  '- If they gave no value, the feedback says so kindly and suggests working out the first few rounds of the loop by hand to see the pattern.',
+  '- A value may be written as a calculation instead of the number (e.g. "2 + 4 + … + 20" or "10 × 11 ÷ 2"), because working out a long sum by hand proves nothing about the code. Each calculation has been worked out for you under THEIR CALCULATIONS: judge the prediction as if it said that number, and in the feedback say what their calculation comes to.',
+  '- If they gave no value, the feedback says so kindly and suggests writing the number, or the calculation that gives it.',
   '- feedback: 1-3 kind sentences. If correct, name the reasoning they got right. If not, point to the lines that produce the actual output and where their mental model differed.',
   'Respond with ONLY JSON: {"correct":true,"feedback":"..."}',
 ].join('\n');
 
-export function predictFeedbackPrompt(path: string, numberedFile: string, stdin: string, actual: string, prediction: string): string {
+/** `calculations`: what each calculation in the prediction comes to, worked out by the platform (checks.ts). */
+export function predictFeedbackPrompt(path: string, numberedFile: string, stdin: string, actual: string, prediction: string,
+  calculations?: { text: string; value: string }[]): string {
   return [
     `${path} (line numbers added):`,
     numberedFile,
@@ -322,6 +325,7 @@ export function predictFeedbackPrompt(path: string, numberedFile: string, stdin:
     `INPUT: ${stdin.trim() ? stdin : '(none)'}`,
     `ACTUAL OUTPUT:\n${actual}`,
     `STUDENT PREDICTION:\n${prediction}`,
+    ...(calculations?.length ? [`THEIR CALCULATIONS:\n${calculations.map((c) => `${c.text} = ${c.value}`).join('\n')}`] : []),
   ].join('\n');
 }
 

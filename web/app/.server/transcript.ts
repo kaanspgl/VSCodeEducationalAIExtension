@@ -99,6 +99,10 @@ export async function transcript(code: string): Promise<TranscriptItem[] | undef
           case "predict_start": add("tutor", "🔮 **Predict:** what will the program print?", { tags: ["Predict & run"] }); break;
           case "predict_answer":
             add("student", String(d.prediction ?? ""), { tags: ["Predict & run"] });
+            if (Array.isArray(d.calculations) && d.calculations.length) {
+              const sums = d.calculations.map((c: any) => `${c.text} = ${c.value}`).join(", ");
+              add("event", `Calculation worked out by the platform: ${sums}${d.valueByCalculation ? " (a printed number given as a calculation)" : ""}.`);
+            }
             add("tutor", `${d.correct ? "✅" : "🔍"} ${d.feedback ?? ""}\n\n**What it actually printed:**\n${fence(d.actual ?? "")}`, { tags: [d.correct ? "prediction right" : "prediction wrong"], tone: d.correct ? "ok" : undefined });
             break;
           case "stage":

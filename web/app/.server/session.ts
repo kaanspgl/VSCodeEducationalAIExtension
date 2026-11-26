@@ -4,7 +4,7 @@ import { protocolFor, studyFingerprint, type Protocol } from "./protocol";
 import { CODE_RE, findParticipant, readRoster } from "./roster";
 import { levelForPart, quizUrl, readStudy, readProgress, writeProgress, type Progress, type StudyPart } from "./study";
 import { extractJson, stripThinking } from "@core/study/prompts";
-import { contradictsOutput, isChangeRequest, isPlainQuestion, matchChoices, namesNoOutputNumber, onlyWordingChanged, saidByStudent, sameResult, wordsCoverIdea } from "@core/vibe/checks";
+import { contradictsOutput, isChangeRequest, isPlainQuestion, matchChoices, namesNoOutputNumber, onlyWordingChanged, workOutPrediction, saidByStudent, sameResult, wordsCoverIdea } from "@core/vibe/checks";
 import { formatContext, numbered, type ContextFile, type Selection } from "@core/vibe/contextFormat";
 import { applyBlocks, blocksToText, fencedToBlocks, locateLines, parseBlocks, placeUnnamedBlocks, type EditBlock } from "@core/vibe/edits";
 import * as P from "@core/vibe/prompts";
@@ -26,6 +26,8 @@ const STAGES: Stage[] = ["tour", "predict", "check", "challenge"];
 const STAGE_LABEL: Record<Stage, string> = { tour: "Walk through", predict: "Predict & run", check: "Questions", challenge: "Modify" };
 const INPUT_RE = /\binput\s*\(|sys\.stdin|readline|process\.stdin|prompt\s*\(/;
 /** Step 1's opening question when the model's own can't be used. */
+/** Predict: a long sum is tedious to work out by hand and proves nothing about the code, so its calculation counts too. */
+const PREDICT_CALC_TIP = "If a number would take long to work out by hand, you can write the calculation that gives it instead, like `2 + 4 + … + 20` or `6 × 7`, and I'll work it out.";
 const FIRST_IDEA_QUESTION = "What does the program start with, what does it do each time round (what does it keep track of or check), and what does it show at the end?";
 /** Where the assistant says it lives, in its system prompt. */
 const WHERE = "inside a web-based code editor";
@@ -1352,7 +1354,7 @@ export class VibeSession {
     const truth = out + (err ? `\n[error]\n${err}` : "");
     const inputNote = stdin.trim() ? `It will be given this input:\n\`\`\`\n${stdin.trimEnd()}\n\`\`\`\n` : "";
     const msg = this.say("tutor",
-      `🔮 **Predict:** read \`${p.path}\` in the editor. ${inputNote}Before I **run** it, what do you think it will print? Type your best guess. A wrong guess is useful too: it shows us what to look at.`,
+      `🔮 **Predict:** read \`${p.path}\` in the editor. ${inputNote}Before I **run** it, what do you think it will print? Type your best guess. A wrong guess is useful too: it shows us what to look at.\n\n${PREDICT_CALC_TIP}`,
       [{ label: "Skip", cmd: "skipPredict" }]);
     this.awaiting = { kind: "predict", id: p.id, truth, stdin, msgId: msg.id };
     p.learn.predict = "active";
@@ -1368,19 +1370,25 @@ export class VibeSession {
     const p = this.proposals.get(a.id)!;
 
     // Exact (after normalising spaces) is objective; otherwise the model judges whether the guess is right in substance.
-    // A guess that names none of the printed numbers ("the sum of the numbers") says what the program works out,
-    // not what it shows: it is not counted as right, and gets the same feedback for everyone.
+    // A value may be written as a calculation ("1 + 2 + … + 50"): it is worked out here, the same way for everyone,
+    // and a guess that is exact once its calculations are worked out is right without the model.
+    // A guess that names none of the printed numbers, even as a calculation ("the sum of the numbers"), says what
+    // the program works out, not what it shows: it is not counted as right, and gets the same feedback for everyone.
     const exact = norm(text) === norm(a.truth);
-    const vague = !exact && namesNoOutputNumber(text, a.truth);
-    let correct = exact;
+    const calc = exact ? undefined : workOutPrediction(text, a.truth);
+    const byCalculation = !!calc && norm(calc.worked) === norm(a.truth);
+    const vague = !exact && !byCalculation && namesNoOutputNumber(calc?.worked ?? text, a.truth);
+    let correct = exact || byCalculation;
+    const sums = calc?.calculations.map((c) => `${c.text} = ${c.value}`).join(", ");
     let feedback = vague
-      ? "That's what the program works out, but a prediction says what it will show on the screen. Next time, try working out the first few rounds of the loop by hand and look for the pattern."
+      ? `That's what the program works out, but a prediction says what it will show on the screen. Next time, write the number it shows, or the calculation that gives it (like 2 + 4 + … + 20).`
+      : byCalculation ? `Spot on: ${sums}, and that's exactly what it prints.`
       : "Spot on — that's exactly what it prints.";
     if (!correct && !vague) {
       this.setBusy(true, "Running it and comparing…");
       const code = (await this.ws.read(p.path)) ?? "";
       const r = await this.askJson<{ correct: boolean; feedback: string }>(
-        P.PREDICT_FEEDBACK_SYSTEM, P.predictFeedbackPrompt(p.path, numbered(code.split("\n")), a.stdin, a.truth, text),
+        P.PREDICT_FEEDBACK_SYSTEM, P.predictFeedbackPrompt(p.path, numbered(code.split("\n")), a.stdin, a.truth, text, calc?.calculations),
         (v) => typeof v.correct === "boolean"
       );
       this.setBusy(false);
@@ -1391,7 +1399,9 @@ export class VibeSession {
     if (correct) this.stats.predRight++;
     this.logger.log("vibe_learn", undefined, {
       kind: "predict_answer", id: a.id, prediction: text, actual: a.truth, correct, exact, vague: vague || undefined,
-      judgedBy: exact ? "exact" : vague ? "rule" : "model", feedback,
+      judgedBy: exact ? "exact" : byCalculation ? "calculation" : vague ? "rule" : "model", feedback,
+      // Its calculations, and whether one gave a printed number it didn't write out: the summary counts those right predictions apart.
+      calculations: calc?.calculations, valueByCalculation: calc?.givesOutput || undefined,
     });
     this.say("tutor", `${correct ? "✅" : "🔍"} ${feedback}\n\n**What it actually printed:**\n\`\`\`\n${a.truth}\n\`\`\``);
     await this.markStage(a.id, "predict", "done");
@@ -2059,7 +2069,7 @@ export class VibeSession {
     v.placeholder =
       this.awaiting?.kind === "gate" && this.gate?.step === 1 ? "Step 1: how will the program work? In your own words…"
       : this.awaiting?.kind === "gate" ? "Step 2: write every step, in your own words…"
-      : this.awaiting?.kind === "predict" ? "What will it print? Your best guess…"
+      : this.awaiting?.kind === "predict" ? "What will it print? The number, or the calculation that gives it…"
       : this.tour ? "Ask about this part of the code…"
       : v.ctx.selection ? "Ask about, or ask to change, the selected code…"
       : "Describe what to build, change, fix, or explain…";

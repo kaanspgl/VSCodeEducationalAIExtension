@@ -5,7 +5,7 @@ import { StudyLogger } from '../study/logger';
 import { extractJson, stripThinking } from '../study/prompts';
 import { interpreterFor, runFile, runProgram } from '../study/runner';
 import { buildContext, listFiles, numbered, ProjectContext, quickInfo } from './context';
-import { matchChoices, onlyWordingChanged, sameResult } from './checks';
+import { matchChoices, onlyWordingChanged, sameResult, workOutPrediction } from './checks';
 import { applyBlocks, blocksToText, EditBlock, fencedToBlocks, locateLines, parseBlocks, placeUnnamedBlocks } from './edits';
 import { ProposedContent } from './proposed';
 import * as P from './prompts';
@@ -1060,7 +1060,7 @@ export class VibeSession {
     const truth = out + (err ? `\n[error]\n${err}` : '');
     const inputNote = stdin.trim() ? `It will be given this input:\n\`\`\`\n${stdin.trimEnd()}\n\`\`\`\n` : '';
     const msg = this.say('tutor',
-      `🔮 **Predict:** read \`${p.path}\` in the editor. ${inputNote}Before I **run** it, what do you think it will print? Type your best guess. A wrong guess is useful too: it shows us what to look at.`,
+      `🔮 **Predict:** read \`${p.path}\` in the editor. ${inputNote}Before I **run** it, what do you think it will print? Type your best guess. A wrong guess is useful too: it shows us what to look at.\n\nIf a number would take long to work out by hand, you can write the calculation that gives it instead, like \`2 + 4 + … + 20\` or \`6 × 7\`, and I'll work it out.`,
       [{ label: 'Skip', cmd: 'skipPredict' }]);
     this.awaiting = { kind: 'predict', id: p.id, truth, stdin, msgId: msg.id };
     p.learn.predict = 'active';
@@ -1075,13 +1075,18 @@ export class VibeSession {
     this.say('student', text);
     const p = this.proposals.get(a.id)!;
 
-    let correct = norm(text) === norm(a.truth);
-    let feedback = 'Spot on — that\'s exactly what it prints.';
+    // A value may be written as a calculation ("1 + 2 + … + 50"): worked out here, the same way as the web version.
+    const exact = norm(text) === norm(a.truth);
+    const calc = exact ? undefined : workOutPrediction(text, a.truth);
+    let correct = exact || (!!calc && norm(calc.worked) === norm(a.truth));
+    let feedback = calc && correct
+      ? `Spot on: ${calc.calculations.map(c => `${c.text} = ${c.value}`).join(', ')}, and that's exactly what it prints.`
+      : 'Spot on — that\'s exactly what it prints.';
     if (!correct) {
       this.setBusy(true, 'Running it and comparing…');
       const code = (await readCurrent(this.fileUri(p.path))) ?? '';
       const r = await this.askJson<{ correct: boolean; feedback: string }>(
-        P.PREDICT_FEEDBACK_SYSTEM, P.predictFeedbackPrompt(p.path, numbered(code.split('\n')), a.stdin, a.truth, text),
+        P.PREDICT_FEEDBACK_SYSTEM, P.predictFeedbackPrompt(p.path, numbered(code.split('\n')), a.stdin, a.truth, text, calc?.calculations),
         v => typeof v.correct === 'boolean'
       );
       this.setBusy(false);
@@ -1090,7 +1095,10 @@ export class VibeSession {
     }
     this.stats.predTotal++;
     if (correct) this.stats.predRight++;
-    this.logger.log('vibe_learn', undefined, { kind: 'predict_answer', id: a.id, prediction: text, actual: a.truth, correct, feedback });
+    this.logger.log('vibe_learn', undefined, {
+      kind: 'predict_answer', id: a.id, prediction: text, actual: a.truth, correct, feedback,
+      calculations: calc?.calculations, valueByCalculation: calc?.givesOutput || undefined,
+    });
     this.say('tutor', `${correct ? '✅' : '🔍'} ${feedback}\n\n**What it actually printed:**\n\`\`\`\n${a.truth}\n\`\`\``);
     await this.markStage(a.id, 'predict', 'done');
   }
