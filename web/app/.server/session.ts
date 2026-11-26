@@ -342,12 +342,11 @@ export class VibeSession {
       this.say("tutor", "Hi! I can see your whole project. Ask me to build something, change or fix code, or explain how something works.");
     } else if (this.level === "guided") {
       this.say("tutor",
-        "Hi! I'm your vibe-coding partner. Tell me what you want to build, change or fix. I can see your whole project, and if you select code first I'll focus on that.\n\n" +
-        "For anything that needs real logic, we'll go through three steps:\n" +
-        "1. **Explain the idea**: tell me in plain words how the program will work: what it starts with, what it does each time round, and what it shows at the end.\n" +
-        "2. **Walk through the code**: I write it from your idea, then we go through it together before you accept it.\n" +
-        "3. **Predict, run & modify**: guess what it prints, run it, answer a question about it, and make a small change yourself.\n\n" +
-        "You keep the thinking; I do the typing.");
+        "Hi! Tell me what you want to build, change or fix. I can see your whole project; select code first and I'll focus on it.\n\n" +
+        "Anything that needs real logic goes through three steps:\n" +
+        "1. **Explain the idea** in plain words: what the program starts with, what it does each time round, and what it shows at the end.\n" +
+        "2. **Walk through the code** I write from your idea, before you accept it.\n" +
+        "3. **Predict, run & modify**: guess what it prints, run it, answer a question about it, and make a small change yourself.");
     } else {
       this.say("tutor",
         "Hi! I'm your vibe-coding partner. Tell me what you want to build, change, fix or understand. I can see your whole project, and if you select code first I'll focus on that.\n\n" +
@@ -647,14 +646,10 @@ export class VibeSession {
       answerOnly: opts.answerOnly || undefined, unnamedPlaced: loose.blocks.length || undefined, droppedBlocks: dropped || undefined, ...during,
     }, res.ms);
 
-    const hint = cards.some((c) => c.status === "pending") && this.level === "guided" && opts.structured
-      ? "\n\n" + (this.requireSteps
-        ? "**Step 3: Read the code.** I wrote it from your steps. Let's walk through it, then you can accept it and we'll predict, run and modify it."
-        : "**Step 2: Walk through the code.** I wrote it from your idea. Let's go through it together before you accept it.")
-      : "";
+    // The step it moves on to is on screen (the track and the card's heading), so the reply doesn't announce it.
     this.view.messages.push(this.tag({
       id: ++this.msgSeq, role: "tutor",
-      text: (shown || (blocks.length ? "Here are the changes:" : "(no reply)")) + hint,
+      text: shown || (blocks.length ? "Here are the changes:" : "(no reply)"),
       changes: cards.length ? cards : undefined,
     }));
     const first = cards.find((c) => c.status === "pending");
@@ -800,12 +795,12 @@ export class VibeSession {
     const res = await this.ideaCheck(g);
     this.setBusy(false);
     if (res?.verdict === "enough") {
-      this.gateSay(`${this.flowLine()}\n\n✅ **Step 1: Explain the idea.** Your request already covers it. ${res.reply}`.trim());
+      this.gateSay(`✅ Your request already explains the idea. ${res.reply}`.trim());
       return this.afterIdea();
     }
     const question = res?.reply || FIRST_IDEA_QUESTION;
     g.turns.push({ role: "tutor", text: question });
-    this.gateSay(`${this.flowLine()}\n\n**Step 1: Explain the idea.** Before I write it, tell me in plain words how the program will work. ${question}`);
+    this.gateSay(`Before I write it, tell me in plain words how the program will work. ${question}`);
   }
 
   /**
@@ -1275,7 +1270,6 @@ export class VibeSession {
     this.tour = { id: p.id, stops, index: 0, pending };
     p.learn.tour = "active";
     this.logger.log("vibe_learn", undefined, { kind: "tour_start", id: p.id, stops: stops.length, relocated, pending });
-    if (p.structured) this.say("tutor", "🧭 **Walkthrough:** follow the highlighted lines in the editor and press **Next** to move on. Ask me about anything that isn't clear.");
     await this.showTourStop();
   }
 
@@ -1310,7 +1304,8 @@ export class VibeSession {
     this.logger.log("vibe_learn", undefined, { kind: "tour_end", id: t.id, reachedStop: t.index + 1, of: t.stops.length, status });
     if (silent) return;
     if (p.card.status === "pending") {
-      this.say("tutor", "That's the walkthrough. If it makes sense, press **Accept** on the change, or ask me about anything that's unclear first.");
+      // In Structured mode the card asks "Keep this code?" with Accept and Reject; elsewhere the tutor says it.
+      if (!(p.structured && this.level === "guided")) this.say("tutor", "That's the walkthrough. If it makes sense, press **Accept** on the change, or ask me about anything that's unclear first.");
       return;
     }
     await this.advance(p.id);
@@ -2132,13 +2127,6 @@ export class VibeSession {
     if (this.requireSteps) return { labels, step: 3, sub, changeId };
     const inWalkthrough = latest.card.status === "pending" || next === "tour";
     return { labels, step: inWalkthrough ? 2 : 3, sub: inWalkthrough ? (latest.card.status === "pending" && latest.learn.tour !== "active" ? "accept the code" : "") : sub, changeId };
-  }
-
-  /** The flow in one line, as configured. */
-  private flowLine(): string {
-    return this.requireSteps
-      ? "Before I write any code: **1. Explain the idea → 2. Write the steps → 3. Read the code.**"
-      : "Quick one before I write the code: **1. Explain the idea → 2. Walk through the code → 3. Predict, run & modify.**";
   }
 
   /** What the student is looking at during a walkthrough: the current stop, and the code itself if it isn't accepted yet. */
