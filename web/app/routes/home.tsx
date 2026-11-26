@@ -2,11 +2,10 @@ import { useEffect, useState } from "react";
 import { data } from "react-router";
 import { readConsent } from "~/.server/consent";
 import { sessionFor } from "~/.server/sessions";
-import { ChatPanel } from "~/components/ChatPanel";
-import { EditorPane } from "~/components/EditorPane";
 import { Setup } from "~/components/Setup";
 import { StudyEntry, type EntryStep } from "~/components/StudyEntry";
 import { StudyScreen } from "~/components/StudyScreen";
+import { Workspace } from "~/components/Workspace";
 import type { Snapshot } from "~/lib/types";
 import type { Route } from "./+types/home";
 
@@ -53,11 +52,5 @@ export default function Home({ loaderData }: Route.ComponentProps) {
       : <Setup view={view} onStudy={() => setEntry("consent")} />;
   }
   if (view.stage === "survey" || view.stage === "done") return <StudyScreen view={view} />;
-  return (
-    <div className="layout">
-      {!connected && <div className="offline">Reconnecting to the server…</div>}
-      <EditorPane editor={editor} view={view} />
-      <ChatPanel view={view} />
-    </div>
-  );
+  return <Workspace view={view} editor={editor} connected={connected} />;
 }

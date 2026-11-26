@@ -1,12 +1,49 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { action, post } from "~/lib/api";
+import { DEFAULT_LABELS } from "~/lib/flow";
 import { md } from "~/lib/md";
 import type { VibeChange, VibeMsg, VibeView } from "~/lib/types";
 import { Icon } from "./Icon";
-import { LEVELS, STAGE_ICON } from "./levels";
+import { STAGE_ICON } from "./levels";
 
-/** The VibeLearner panel: the same chat, change cards, walkthrough, quiz and progress as the extension's webview. */
-export function ChatPanel({ view }: { view: VibeView }) {
+/** A stretch of the conversation about one study question (or, outside a study, one request). */
+type Topic = { key: string; task?: number; msgs: VibeMsg[] };
+/** Consecutive messages in one Structured step (or outside the steps, `step` undefined). */
+type Run = { key: string; step?: number; msgs: VibeMsg[] };
+
+function topicsOf(view: VibeView): Topic[] {
+  const study = view.study?.step === "work" ? view.study : undefined;
+  const out: (Topic & { id: string })[] = [];
+  for (const m of view.messages) {
+    const id = study ? `t${m.task ?? "-"}` : `r${m.round ?? 0}`;
+    const last = out[out.length - 1];
+    if (last?.id === id) last.msgs.push(m);
+    else out.push({ id, key: `${id}@${m.id}`, task: m.task, msgs: [m] });
+  }
+  // The question on screen always has its own section, even before anything is said in it.
+  if (study && out[out.length - 1]?.task !== study.task) out.push({ id: `t${study.task}`, key: `t${study.task}@new`, task: study.task, msgs: [] });
+  return out;
+}
+
+function runsOf(msgs: VibeMsg[]): Run[] {
+  const out: Run[] = [];
+  for (const m of msgs) {
+    const last = out[out.length - 1];
+    if (last && last.step === m.step) last.msgs.push(m);
+    else out.push({ key: `s${m.step ?? "-"}@${m.id}`, step: m.step, msgs: [m] });
+  }
+  return out;
+}
+
+const hasPending = (m: VibeMsg) => !!m.changes?.some((c) => c.status === "pending");
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+const plain = (s: string) => s.replace(/\n\n_\(about [^)]*\)_$/, "").replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
+
+/**
+ * Right column: the conversation, folded into sections. In a study each question has its own section, and inside
+ * it each Structured step; earlier ones fold away so the current one is what you see. Any section opens with a click.
+ */
+export function ChatPanel({ view, attention }: { view: VibeView; attention: boolean }) {
   const busy = view.busy;
   const logRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -14,14 +51,28 @@ export function ChatPanel({ view }: { view: VibeView }) {
   const [projectName, setProjectName] = useState<string | undefined>();
   // Scrolled well up from the newest message: offer a way back down.
   const [farUp, setFarUp] = useState(false);
+  // Sections the student opened or closed themselves; everything else follows the defaults.
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  const [showAll, setShowAll] = useState(false);
 
   // A failed send hands the message back so it isn't lost.
   useEffect(() => { if (view.draft) setText(view.draft.text); }, [view.draft?.id]);
 
+  // Pressing any button on the page (Accept, Next, an answer…) means "show me what happens next": follow the
+  // conversation down. Opening or closing a section of it doesn't.
+  useEffect(() => {
+    const follow = (e: MouseEvent) => {
+      const b = (e.target as HTMLElement | null)?.closest("button");
+      if (b && !b.matches(".topichead, .stephead, .jump")) atBottom.current = true;
+    };
+    document.addEventListener("click", follow, true);
+    return () => document.removeEventListener("click", follow, true);
+  }, []);
+
   useLayoutEffect(() => {
     const log = logRef.current;
     if (log && atBottom.current) log.scrollTop = log.scrollHeight;
-  }, [view.messages.length, view.busy, view.messages[view.messages.length - 1]?.text]);
+  }, [view.messages.length, view.busy, view.messages[view.messages.length - 1]?.text, view.study?.task]);
 
   // What was pasted into the box since the last send. Only what is still in the message counts, so a paste that
   // was deleted again doesn't mark a request typed in the participant's own words.
@@ -46,63 +97,39 @@ export function ChatPanel({ view }: { view: VibeView }) {
     post({ type: "send", text: t, target: view.target, ...(pasted ? { pasted: Math.min(pasted, t.length) } : {}) });
   };
 
-  const learn = view.level !== "off";
   const ctx = view.ctx;
   // One primary action at a time: while a walkthrough or question is open, that box has it, not Accept or Send.
   const boxOpen = !!(view.tour || view.quiz);
   const acceptMsg = boxOpen ? undefined : [...view.messages].reverse().find((m) => m.changes?.some((c) => c.status === "pending"))?.id;
+
+  const study = view.study?.step === "work" ? view.study : undefined;
+  const labels = view.structured?.labels ?? DEFAULT_LABELS;
+  const topics = topicsOf(view);
+  const cur = topics.length - 1;
+  const isOpen = (key: string, byDefault: boolean) => showAll || (toggled[key] ?? byDefault);
+  const flip = (key: string, now: boolean) => { setShowAll(false); setToggled((t) => ({ ...t, [key]: !now })); };
+  const folded = topics.length > 1 || topics.some((t) => runsOf(t.msgs).filter((r) => r.step).length > 1);
+
+  const topicTitle = (t: Topic, i: number) => {
+    if (study && t.task !== undefined) return { name: `Question ${t.task + 1}`, about: study.tasks[t.task] ?? "" };
+    const first = t.msgs.find((m) => m.role === "student");
+    return first ? { name: "Request", about: plain(first.text) } : { name: i === 0 ? "Getting started" : "Conversation", about: "" };
+  };
+
   return (
-    // Pressing any button (Accept, Next, an answer…) means "show me what happens next": follow the log down.
-    <section className="panel" onClickCapture={(e) => { if ((e.target as HTMLElement).closest("button")) atBottom.current = true; }}>
-      <header className="topbar">
-        <span className="brand"><span className="brandmark" aria-hidden>V</span><span className="brandtext">VibeLearner</span></span>
-        {view.project && (
-          <span className="badge projchip" title="Working only inside this folder">
-            <Icon name="folder" size={12} /> {view.project}/ <button className="chipx" disabled={busy} onClick={() => action("leaveProject")} title="Leave project (see all your files)" aria-label={`Leave project ${view.project}`}>✕</button>
-          </span>
-        )}
-        <span className="badge ctxchip" title="What VibeLearner can see">
-          <Icon name="folder" size={12} /> {ctx.files} file{ctx.files === 1 ? "" : "s"}{ctx.active ? ` · ${ctx.active}` : ""}{ctx.selection ? <> · <b>{ctx.selection}</b></> : null}
-        </span>
+    <section className="panel" aria-label="Conversation">
+      <div className="panelhead">
+        <Icon name="chat" size={14} />
+        <span className="phtitle">Conversation</span>
         <div className="grow" />
-        {view.logging && <span className="badge logbadge" title="Signed in for the study: this session is recorded under this code"><span className="pulse" aria-hidden>●</span> {view.participant}</span>}
-        {/* In a research session the mode isn't named: participants aren't told which version they are using. */}
-        {view.ui.mode && (
-          <label className="levelpick" title="Structured or regular vibe coding">Mode
-            <select value={view.level} disabled={view.levelLocked || busy} onChange={(e) => action("setLevel", e.target.value)}>
-              {LEVELS.map((l) => <option key={l.v} value={l.v}>{l.label}</option>)}
-            </select>
-          </label>
+        {folded && (
+          <button className="linkbtn" onClick={() => { setShowAll(!showAll); setToggled({}); }}>
+            {showAll ? "Fold earlier parts" : "Show everything"}
+          </button>
         )}
-        <SignOut view={view} />
-      </header>
+      </div>
 
-      {learn && view.ui.progress && <Progress view={view} />}
-
-      <main className="main">
-        <StudyBar view={view} />
-        <StructuredBar view={view} />
-        {view.plan && (
-          <section className="planbox" aria-label="Plan">
-            <div className="quiz-head">
-              <div className="grow"><div className="boxlabel">📋 Plan</div><div className="goal">{view.plan.goal}</div></div>
-              <button className="linkbtn" disabled={busy} onClick={() => action("dropPlan")} title="Stop following this plan">Close</button>
-            </div>
-            <ol className="plansteps">
-              {view.plan.steps.map((s, i) => (
-                <li key={i} className={s.status}><span className="mark" aria-hidden>{s.status === "done" ? "✓" : s.status === "doing" ? "▶" : "○"}</span> {s.title}</li>
-              ))}
-            </ol>
-            {view.plan.next && (
-              <div className="cactions">
-                <button className="btn sm" disabled={busy} onClick={() => action("buildNext")}>Build step {view.plan.next.index + 1}: {view.plan.next.title}</button>
-                {view.plan.remaining > 1 && <button className="btn secondary sm" disabled={busy} onClick={() => action("buildAll")}>Build the rest at once</button>}
-              </div>
-            )}
-          </section>
-        )}
-
-        <div className="logwrap">
+      <div className="logwrap">
         <div ref={logRef} className="scroll" role="log" aria-live="polite" aria-label="Conversation"
           onScroll={(e) => {
             const l = e.currentTarget;
@@ -110,7 +137,60 @@ export function ChatPanel({ view }: { view: VibeView }) {
             atBottom.current = gap < 40;
             setFarUp(gap > 240);
           }}>
-          {view.messages.map((m) => <Message key={m.id} m={m} busy={busy} primaryAccept={m.id === acceptMsg} />)}
+          {topics.map((t, i) => {
+            const current = i === cur;
+            // Code still waiting to be accepted or rejected never folds out of sight.
+            const waiting = t.msgs.some(hasPending);
+            const open = isOpen(t.key, current || waiting);
+            const runs = runsOf(t.msgs);
+            const stepRuns = runs.filter((r) => r.step);
+            const lastStepRun = stepRuns[stepRuns.length - 1];
+            const { name, about } = topicTitle(t, i);
+            const steps = [...new Set(stepRuns.map((r) => r.step!))];
+            // Outside a study, a lone section needs no header.
+            const header = !!study || topics.length > 1;
+            return (
+              <section key={t.key} className={`topic ${current ? "current" : ""} ${open ? "open" : ""}`}>
+                {header && (
+                  <button className="topichead" aria-expanded={open} onClick={() => flip(t.key, open)}>
+                    <span className="chev" aria-hidden><Icon name="chevron" size={11} /></span>
+                    <span className="tname">{name}</span>
+                    {about && <span className="tabout">{clip(about, 70)}</span>}
+                    <span className="grow" />
+                    {waiting && <span className="twait">code to accept</span>}
+                    {!open && steps.map((n) => <span key={n} className="tstep" title={labels[n - 1]}>{n}</span>)}
+                    {!open && <span className="tcount">{t.msgs.length} message{t.msgs.length === 1 ? "" : "s"}</span>}
+                    {current && open && <span className="tnow">current</span>}
+                  </button>
+                )}
+                {open && (
+                  <div className="topicbody">
+                    {t.msgs.length === 0 && <p className="hint emptytopic">Nothing here yet for this question.</p>}
+                    {runs.map((r) => {
+                      if (!r.step) return r.msgs.map((m) => <Message key={m.id} m={m} busy={busy} primaryAccept={m.id === acceptMsg} />);
+                      const latest = r === lastStepRun;
+                      const live = current && latest && !!view.structured && !view.structured.done && view.structured.step === r.step;
+                      const done = !live && (!latest || !current || !!view.structured?.done || (view.structured?.step ?? 0) > r.step);
+                      const ropen = isOpen(r.key, latest || r.msgs.some(hasPending));
+                      return (
+                        <div key={r.key} className={`steprun ${live ? "live" : ""} ${ropen ? "open" : ""}`}>
+                          <button className="stephead" aria-expanded={ropen} onClick={() => flip(r.key, ropen)}>
+                            <span className={`snum ${done ? "done" : live ? "now" : ""}`} aria-hidden>{done ? <Icon name="check" size={10} /> : r.step}</span>
+                            <span className="sname">Step {r.step}: {labels[r.step - 1] ?? ""}</span>
+                            <span className="grow" />
+                            {!ropen && <span className="tcount">{r.msgs.length} message{r.msgs.length === 1 ? "" : "s"}</span>}
+                            {live && <span className="tnow">now</span>}
+                            <span className="chev" aria-hidden><Icon name="chevron" size={11} /></span>
+                          </button>
+                          {ropen && <div className="runbody">{r.msgs.map((m) => <Message key={m.id} m={m} busy={busy} primaryAccept={m.id === acceptMsg} />)}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })}
           {busy && <div className="thinking" role="status"><span className="spin" aria-hidden />{view.busyLabel || "Working…"}</div>}
         </div>
         {farUp && (
@@ -118,193 +198,61 @@ export function ChatPanel({ view }: { view: VibeView }) {
             <Icon name="down" size={13} /> Jump to latest
           </button>
         )}
-        </div>
+      </div>
 
-        {view.tour && (
-          <section className="tourbox" aria-label="Walkthrough">
-            <div className="quiz-head">
-              <span className="hint">🧭 Walkthrough · stop {view.tour.index + 1} of {view.tour.total} · <code>{view.tour.path}</code> line{view.tour.start === view.tour.end ? ` ${view.tour.start}` : `s ${view.tour.start}–${view.tour.end}`}{view.tour.pending ? " (proposed)" : ""}</span>
-              <button className="linkbtn" disabled={busy} onClick={() => action("tourEnd")}>Exit</button>
-            </div>
-            <div className="tourprog" aria-hidden>
-              {Array.from({ length: view.tour.total }, (_, i) => <span key={i} className={i <= view.tour!.index ? "on" : ""} />)}
-            </div>
-            <h3 className="tour-title">{view.tour.title}</h3>
-            <div dangerouslySetInnerHTML={{ __html: md(view.tour.text) }} />
-            <div className="cactions">
-              <button className="btn secondary sm" disabled={busy || view.tour.index === 0} onClick={() => action("tourPrev")}>◀ Back</button>
-              {view.tour.index + 1 < view.tour.total
-                ? <button className="btn sm" disabled={busy} onClick={() => action("tourNext")}>Next ▶</button>
-                : <button className="btn sm" disabled={busy} onClick={() => action("tourEnd")}>Finish walkthrough</button>}
-              <span className="hint"><span className="swatch" aria-hidden />The highlighted lines are in the editor.</span>
-            </div>
-          </section>
-        )}
-
-        {view.quiz && (
-          <section className="quizbox" aria-label="Question">
-            <div className="quiz-head"><span className="hint">🔍 {view.quiz.label} · question {view.quiz.index + 1} of {view.quiz.total}</span><button className="linkbtn" disabled={busy} onClick={() => action("skipQuiz")}>Skip</button></div>
-            <div className="stem" dangerouslySetInnerHTML={{ __html: md(view.quiz.stem) }} />
-            <div className="choices">
-              {view.quiz.choices.map((c, i) => (
-                <button key={i} className="choice" disabled={busy} onClick={() => post({ type: "quizAnswer", choice: i })}><span className="letter">{"ABCD"[i]}</span><span>{c}</span></button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <div className="composer">
-          <div className="actions">
-            <label className="targetpick" title="Where should new code go?">Code goes in
-              <select value={view.target} disabled={busy} onChange={(e) => action("setTarget", e.target.value)}>
-                <option value="auto">Auto (VibeLearner decides)</option>
-                <option value="new">A new file</option>
-                {view.targets.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </label>
-            {projectName === undefined ? (
-              <button className="btn ghost sm" disabled={busy} onClick={() => setProjectName("my-project")} title="Start a new program in its own folder"><Icon name="plus" size={12} /> New project</button>
-            ) : (
-              <form className="inline" onSubmit={(e) => { e.preventDefault(); action("newProject", projectName.trim()); setProjectName(undefined); }}>
-                <input type="text" autoFocus value={projectName} maxLength={40} pattern="[\w\-]{1,40}" title="Letters, numbers, - or _ (no spaces)"
-                  onChange={(e) => setProjectName(e.target.value)} aria-label="Project name" />
-                <button className="btn sm" type="submit" disabled={busy || !/^[\w-]{1,40}$/.test(projectName.trim())}>Create</button>
-                <button className="linkbtn" type="button" onClick={() => setProjectName(undefined)}>Cancel</button>
-              </form>
-            )}
-            <div className="grow" />
-            <button className="btn ghost sm" disabled={!ctx.selection || !view.inputEnabled} onClick={() => action("explainSelection")} title="Select code in the editor first">Explain selection</button>
-          </div>
-          <div className="composer-row">
-            <textarea value={text} disabled={!view.inputEnabled} placeholder={view.placeholder} aria-label="Message to VibeLearner"
-              onChange={(e) => setText(e.target.value)}
-              onPaste={(e) => takeText(e, e.clipboardData.getData("text"))}
-              onDrop={(e) => takeText(e, e.dataTransfer.getData("text"))}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-            <button className={`btn ${boxOpen ? "secondary" : ""}`} disabled={!view.inputEnabled || !text.trim()} onClick={send}><Icon name="send" size={15} /> Send</button>
-          </div>
-          {pasteRefused && view.ui.noPaste
-            ? <span className="hint" role="status">Pasting is turned off here. Describe what you want in your own words.</span>
-            : <span className="hint">Enter to send · Shift+Enter for a new line</span>}
-        </div>
-      </main>
-    </section>
-  );
-}
-
-/** Signs this browser out, so the next person starts from the start screen. A participant's place in the study is kept. */
-function SignOut({ view }: { view: VibeView }) {
-  const ask = view.logging
-    ? `Sign out ${view.participant}? Your place in the study is saved: sign in with the same code to carry on.`
-    : "Leave this session and go back to the start screen? Your files stay on the server, but this conversation is cleared.";
-  return (
-    <button className="btn ghost sm signout" title={view.logging ? "Sign out" : "Back to the start screen"}
-      onClick={() => { if (confirm(ask)) post({ type: "reset" }); }}>
-      <Icon name="exit" size={13} /><span className="sr-only">{view.logging ? "Sign out" : "Back to the start screen"}</span>
-    </button>
-  );
-}
-
-/** Seconds since the participant started this part's questions, ticking; undefined until the browser has the time. */
-function useElapsed(started: number | undefined): number | undefined {
-  const [now, setNow] = useState<number | undefined>(undefined);
-  useEffect(() => {
-    setNow(Date.now());
-    const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-  return now === undefined || started === undefined ? undefined : Math.max(0, Math.floor((now - started) / 1000));
-}
-
-/** The study plan's current question, with the way to the next one and to the end of the part. */
-function StudyBar({ view }: { view: VibeView }) {
-  const st = view.study;
-  const secs = useElapsed(st?.started);
-  if (!st || st.step !== "work") return null;
-  const last = st.task >= st.tasks.length - 1;
-  // Time spent against the suggested time. Nothing is cut off when it runs out.
-  const over = st.minutes > 0 && secs !== undefined && secs >= st.minutes * 60;
-  // With fixed time the part can't be finished before then (the server refuses it too).
-  const locked = !!st.fixedTime && st.minutes > 0 && !over;
-  return (
-    <section className="studybar" aria-label="Study question">
-      <div className="quiz-head">
-        <span className="boxlabel grow">Part {st.part + 1} of {st.parts} · {st.concept} · Question {st.task + 1} of {st.tasks.length}</span>
-        {st.minutes > 0 && secs !== undefined && (
-          <span className={`studyclock ${over ? "over" : ""}`} role="timer" aria-label="Time on this part">
-            {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")} of {st.minutes} min{over ? " · time is up: finish what you're doing, then finish the part" : ""}
+      <div className={`composer ${attention && view.inputEnabled ? "attention" : ""}`}>
+        <div className="composer-meta">
+          <span className="seechip" title="What VibeLearner can see when you send a message">
+            <Icon name="folder" size={12} /> {ctx.files} file{ctx.files === 1 ? "" : "s"}{ctx.active ? ` · ${ctx.active}` : ""}{ctx.selection ? <> · <b>{ctx.selection}</b></> : null}
           </span>
-        )}
-      </div>
-      <div className="studytask">{st.tasks[st.task]}</div>
-      {locked && last && (
-        <p className="hint">This is the last question. The part goes on until the clock reaches {st.minutes}:00: until then, keep working with your programs any way you like.</p>
-      )}
-      <div className="cactions">
-        <button className="btn secondary sm" disabled={view.busy || st.task === 0} onClick={() => action("studyPrev")}>◀ Previous</button>
-        {!last && <button className={`btn ${over ? "secondary" : ""} sm`} disabled={view.busy} onClick={() => action("studyNext")}>Next question ▶</button>}
-        <div className="grow" />
-        {/* Always there: when time is up a participant finishes from wherever they are, without paging through the rest. */}
-        <button className={`btn ${(last && !locked) || over ? "" : "ghost"} sm`} disabled={view.busy || locked}
-          title={locked ? `You can finish this part when the clock reaches ${st.minutes}:00` : undefined}
-          onClick={() => { if (confirm(`Finish part ${st.part + 1}? You can't come back to it afterwards.`)) action("studyFinish"); }}>
-          {locked ? `Finish part ${st.part + 1} at ${st.minutes}:00` : `Finish part ${st.part + 1}`}
-        </button>
+          <div className="grow" />
+          <label className="targetpick" title="Where should new code go?">Code goes in
+            <select value={view.target} disabled={busy} onChange={(e) => action("setTarget", e.target.value)}>
+              <option value="auto">Auto</option>
+              <option value="new">A new file</option>
+              {view.targets.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </label>
+          {!study && (projectName === undefined ? (
+            <button className="btn ghost sm" disabled={busy} onClick={() => setProjectName("my-project")} title="Start a new program in its own folder"><Icon name="plus" size={12} /> New project</button>
+          ) : (
+            <form className="inline" onSubmit={(e) => { e.preventDefault(); action("newProject", projectName.trim()); setProjectName(undefined); }}>
+              <input type="text" autoFocus value={projectName} maxLength={40} pattern="[\w\-]{1,40}" title="Letters, numbers, - or _ (no spaces)"
+                onChange={(e) => setProjectName(e.target.value)} aria-label="Project name" />
+              <button className="btn sm" type="submit" disabled={busy || !/^[\w-]{1,40}$/.test(projectName.trim())}>Create</button>
+              <button className="linkbtn" type="button" onClick={() => setProjectName(undefined)}>Cancel</button>
+            </form>
+          ))}
+        </div>
+        <div className="composer-row">
+          <textarea value={text} disabled={!view.inputEnabled} placeholder={view.placeholder} aria-label="Message to VibeLearner"
+            onChange={(e) => setText(e.target.value)}
+            onPaste={(e) => takeText(e, e.clipboardData.getData("text"))}
+            onDrop={(e) => takeText(e, e.dataTransfer.getData("text"))}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+          <button className={`btn ${boxOpen ? "secondary" : ""}`} disabled={!view.inputEnabled || !text.trim()} onClick={send}><Icon name="send" size={15} /> Send</button>
+        </div>
+        {pasteRefused && view.ui.noPaste
+          ? <span className="hint" role="status">Pasting is turned off here. Describe what you want in your own words.</span>
+          : <span className="hint">{view.quiz ? "Answer the question under the code first." : "Enter to send · Shift+Enter for a new line"}</span>}
       </div>
     </section>
-  );
-}
-
-function StructuredBar({ view }: { view: VibeView }) {
-  const st = view.structured;
-  if (!st) return null;
-  return (
-    <ol className="stepbar" aria-label="Steps for this request">
-      {st.labels.map((label, i) => {
-        const n = i + 1;
-        const state = n < st.step ? "done" : n === st.step ? "now" : "next";
-        return (
-          <li key={n} className={`sb ${state}`} aria-current={state === "now" ? "step" : undefined}>
-            <span className="num" aria-hidden>{state === "done" ? "✓" : n}</span>
-            <span>
-              <span className="sr-only">{state === "done" ? "Done: " : state === "now" ? "Now: " : "Next: "}</span>
-              {label}
-              {state === "now" && st.sub && <span className="sub">{st.sub}</span>}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-function Progress({ view }: { view: VibeView }) {
-  const [open, setOpen] = useState(false);
-  const any = view.skills.some((s) => s.value !== "—") || view.concepts.length > 0;
-  return (
-    <details className="progress" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary><span className="chev" aria-hidden><Icon name="chevron" size={12} /></span><Icon name="chart" /> Your progress{any ? "" : <span className="muted"> (builds up as you go)</span>}</summary>
-      <div className="skills">
-        {view.skills.map((s) => <div key={s.label} className="skill" title={s.detail}><span>{s.label}</span><b>{s.value}</b></div>)}
-      </div>
-      {view.concepts.length > 0 && (
-        <>
-          <div className="hint" style={{ marginTop: 8 }}>Concepts you've worked with</div>
-          <div className="chips">
-            {view.concepts.map((c) => (
-              <span key={c.name} className="cchip" title={`in ${c.seen} change(s)${c.total ? `, ${c.right}/${c.total} questions right` : ""}`}>
-                {c.name}{c.total ? <> <span className={c.right === c.total ? "ok" : c.right ? "muted" : "warn"}>{c.right}/{c.total}</span></> : null}
-              </span>
-            ))}
-          </div>
-        </>
-      )}
-      <div className="cactions"><button className="btn secondary sm" disabled={!view.inputEnabled} onClick={() => action("quizProject")}>Quiz me on my program</button></div>
-    </details>
   );
 }
 
 function Message({ m, busy, primaryAccept }: { m: VibeMsg; busy: boolean; primaryAccept: boolean }) {
+  // ▶ Run's output is under the editor; the conversation keeps a line that opens to show it.
+  if (m.look === "output") {
+    const [head, ...rest] = m.text.split("\n");
+    return (
+      <div className="msg system">
+        <details className="runline">
+          <summary><span className="chev" aria-hidden><Icon name="chevron" size={10} /></span><span dangerouslySetInnerHTML={{ __html: md(head.replace(/:\s*$/, "")) }} /></summary>
+          <div dangerouslySetInnerHTML={{ __html: md(rest.join("\n")) }} />
+        </details>
+      </div>
+    );
+  }
   const who = m.role === "student" ? "You: " : m.role === "tutor" ? "VibeLearner: " : "";
   return (
     <div className={`msg ${m.role}`}>
@@ -342,24 +290,23 @@ function Changes({ changes, busy, primaryAccept }: { changes: VibeChange[]; busy
   return (
     <div className="changes">
       {changes.map((c) => (
-        <div key={c.id}>
-          <div className={`change ${c.status}`}>
-            <div className="cfile">
-              <code>{c.path}</code>{c.isNew && <span className="tag">new file</span>}
-              {c.status !== "failed" && <span className="diffstat"><span className="plus">+{c.added}</span> <span className="minus">−{c.removed}</span></span>}
-              <span className="cbtns">
-                {c.status === "pending" ? (
-                  <>
-                    <button className="btn ghost sm" disabled={busy} onClick={() => action("viewDiff", c.id)}>View diff</button>
-                    <button className="btn danger sm" disabled={busy} onClick={() => action("reject", c.id)}>Reject</button>
-                    <button className={acceptCls} disabled={busy} onClick={() => action("accept", c.id)}>Accept</button>
-                  </>
-                ) : c.status === "accepted" ? <span className="status ok">✓ Applied</span>
-                  : c.status === "rejected" ? <span className="status muted">Rejected</span>
-                  : <span className="status warn">Couldn't apply</span>}
-              </span>
-            </div>
-            {c.note && <div className="muted small">{c.note}</div>}
+        <div key={c.id} className={`change ${c.status}`}>
+          <div className="cfile">
+            <code>{c.path}</code>{c.isNew && <span className="tag">new file</span>}
+            {c.status !== "failed" && <span className="diffstat"><span className="plus">+{c.added}</span> <span className="minus">−{c.removed}</span></span>}
+            <span className="cbtns">
+              {c.status === "pending" ? (
+                <>
+                  <button className="btn ghost sm" disabled={busy} onClick={() => action("viewDiff", c.id)}>View diff</button>
+                  <button className="btn danger sm" disabled={busy} onClick={() => action("reject", c.id)}>Reject</button>
+                  <button className={acceptCls} disabled={busy} onClick={() => action("accept", c.id)}>Accept</button>
+                </>
+              ) : c.status === "accepted" ? <span className="status ok">✓ Applied</span>
+                : c.status === "rejected" ? <span className="status muted">Rejected</span>
+                : <span className="status warn">Couldn't apply</span>}
+            </span>
+          </div>
+          {c.note && <div className="muted small">{c.note}</div>}
           {c.learn && (
             <div className="learnrow" aria-label={`Learning steps for ${c.path}`}>
               {c.learn.map((s) => {
@@ -375,7 +322,6 @@ function Changes({ changes, busy, primaryAccept }: { changes: VibeChange[]; busy
               })}
             </div>
           )}
-          </div>
         </div>
       ))}
       {pending.length > 1 && <button className={`btn ${primaryAccept ? "" : "secondary"} sm`} disabled={busy} onClick={() => action("acceptAll", pending[0].id)}>Accept all ({pending.length})</button>}

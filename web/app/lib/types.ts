@@ -24,9 +24,17 @@ export type VibeMsg = {
   changes?: VibeChange[];
   buttons?: MsgButton[];
   tip?: { text: string; improved?: string; score: number };
-  /** How the bubble is drawn: a crash report, a "your turn" challenge, or a quiz result (with its score, e.g. "2/3"). */
-  look?: "crash" | "challenge" | "score";
+  /** How the bubble is drawn: a crash report, a "your turn" challenge, a quiz result (with its score, e.g. "2/3"), or ▶ Run's output. */
+  look?: "crash" | "challenge" | "score" | "output";
   score?: string;
+  /**
+   * Where the message belongs, so the conversation can fold into sections: the study question it was said on (0-based),
+   * the request it belongs to (a new one starts with each new thing the student asks for), and the Structured step
+   * that was in progress (1-3; none outside the steps).
+   */
+  task?: number;
+  round?: number;
+  step?: number;
 };
 
 export type VibeView = {
@@ -46,8 +54,15 @@ export type VibeView = {
   /** A message that failed to send, handed back to the input box. Kept until the next send: the browser may skip a snapshot. */
   draft?: { id: number; text: string };
   quiz?: { label: string; index: number; total: number; stem: string; choices: string[] };
-  /** Structured vibe coding progress for the current request: the step names, the current step, and what is happening in it. */
-  structured?: { labels: string[]; step: number; sub?: string };
+  /**
+   * Structured vibe coding progress for the current request: the step names, the current step, and what is happening in
+   * it. `changeId` is the change the steps follow (its card has each stage's status); `done` once every step is over.
+   */
+  structured?: { labels: string[]; step: number; sub?: string; changeId?: string; done?: boolean };
+  /** What the chat box is waiting for: the explanation in Step 1, or a prediction. */
+  awaiting?: "gate" | "predict";
+  /** The last ▶ Run, for the output panel under the editor. `errorIdx` is the crash "Explain this error" refers to. */
+  lastRun?: { path: string; input: string; stdout: string; stderr?: string; note?: string; errorIdx?: number; at: number };
   tour?: { index: number; total: number; title: string; text: string; path: string; start: number; end: number; pending: boolean };
   plan?: { goal: string; steps: { title: string; status: string }[]; next?: { index: number; title: string }; remaining: number };
   concepts: { name: string; seen: number; right: number; total: number }[];

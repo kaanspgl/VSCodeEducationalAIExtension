@@ -130,6 +130,8 @@ type EditorState = {
 export class VibeSession {
   private view: VibeView;
   private msgSeq = 0;
+  /** Counts the student's requests (not questions or answers along the way), so the conversation can fold by request. */
+  private round = 0;
   private changeSeq = 0;
 
   private cfg: Settings = loadSettings();
@@ -444,6 +446,8 @@ export class VibeSession {
       const p = q.changeId ? this.proposals.get(q.changeId) : undefined;
       if (p) p.learn.check = "skipped";
     }
+    // The steps on screen are the new question's: none yet.
+    this.currentStructured = undefined;
   }
 
   /** With study.fixedTime: how long until the current part may be finished (0 when it may, or without fixed time). */
@@ -482,11 +486,14 @@ export class VibeSession {
       return this.refresh();
     }
     const selNote = ctx.selection ? `\n\n_(about ${ctx.selection.path}, lines ${ctx.selection.startLine}–${ctx.selection.endLine})_` : "";
-    const studentMsg = this.say("student", text + selNote);
     const challenge = this.openChallenge();
     // A plain question about the code ("why is it 51?") gets an answer and no code, in both modes: a reply that also
     // rewrote the file would be a change to review, and wouldn't count as a question about the code (H2).
     const question = isPlainQuestion(text);
+    // A new request starts a new section of the conversation; a question, an answer to a clarifying question, or
+    // anything said inside a walkthrough or a Modify challenge belongs to the request it is about.
+    if (!question && !challenge && !this.tour && this.clarRound === 0) this.round++;
+    const studentMsg = this.say("student", text + selNote);
     this.logger.log("vibe_request", undefined, {
       text, active: ctx.active, selection: ctx.selection && { path: ctx.selection.path, start: ctx.selection.startLine, end: ctx.selection.endLine },
       files: ctx.fileCount, clarRound: this.clarRound, inTour: !!this.tour, source, pasted: pasted || undefined, question: question || undefined,
@@ -643,11 +650,11 @@ export class VibeSession {
         ? "**Step 3: Read the code.** I wrote it from your steps. Let's walk through it, then you can accept it and we'll predict, run and modify it."
         : "**Step 2: Walk through the code.** I wrote it from your idea. Let's go through it together before you accept it.")
       : "";
-    this.view.messages.push({
+    this.view.messages.push(this.tag({
       id: ++this.msgSeq, role: "tutor",
       text: (shown || (blocks.length ? "Here are the changes:" : "(no reply)")) + hint,
       changes: cards.length ? cards : undefined,
-    });
+    }));
     const first = cards.find((c) => c.status === "pending");
     if (first && this.level === "guided" && opts.structured) await this.startStage(first.id, "tour");
     if (cards.some((c) => c.status === "failed")) {
@@ -781,6 +788,9 @@ export class VibeSession {
     };
     this.gate = g;
     this.awaiting = { kind: "gate" };
+    // The request that started the steps was said before they began: it opens Step 1 in the conversation.
+    const last = this.view.messages[this.view.messages.length - 1];
+    if (last?.role === "student") last.step = g.step;
     this.logger.log("vibe_gate", undefined, { kind: "start", request, planStep: opts.planStep });
 
     // The request itself may already explain the idea; check it before asking.
@@ -1791,6 +1801,7 @@ export class VibeSession {
     const input = stdin.trim() ? stdin.replace(/\r\n/g, "\n").replace(/\n?$/, "\n") : "";
     if (INPUT_RE.test(code) && !input) {
       this.say("system", `\`${rel}\` reads input. Type what it should read in the **Program input** box next to ▶ Run (one value per line), then press Run again.`);
+      this.view.lastRun = { path: rel, input: "", stdout: "", note: "This program reads input. Type what it should read in the Program input box next to ▶ Run, then press Run again.", at: Date.now() };
       return;
     }
     this.setBusy(true, "Running…");
@@ -1801,13 +1812,20 @@ export class VibeSession {
       // A run while a Modify challenge on this file is open tests the change it asks for: part of a required step (H2).
       duringChallenge: this.openChallenge(rel) || undefined, inTour: !!this.tour || undefined,
     });
-    if (run.error) { this.say("system", `I can't run it here: ${run.error}`); return; }
-    if (run.timedOut) { this.say("system", `\`${rel}\` didn't finish within 8 seconds — is there a loop that never ends, or does it need more input?`); return; }
-    this.say("system", `▶ Output of \`${rel}\`${input ? " (with your input)" : ""}:\n\`\`\`\n${run.stdout.replace(/\s+$/, "") || "(nothing printed)"}\n\`\`\``);
-    if (run.stderr.trim()) this.reportCrash(rel, run.stderr.trim());
+    // The output panel under the editor shows the last run; the conversation keeps a line for each one.
+    const shown: NonNullable<VibeView["lastRun"]> = { path: rel, input, stdout: run.stdout.replace(/\s+$/, ""), stderr: run.stderr.trim() || undefined, at: Date.now() };
+    this.view.lastRun = shown;
+    if (run.error) { shown.note = `I can't run it here: ${run.error}`; this.say("system", `I can't run it here: ${run.error}`); return; }
+    if (run.timedOut) {
+      shown.note = `It didn't finish within 8 seconds. Is there a loop that never ends, or does it need more input?`;
+      this.say("system", `\`${rel}\` didn't finish within 8 seconds — is there a loop that never ends, or does it need more input?`);
+      return;
+    }
+    this.say("system", `▶ Output of \`${rel}\`${input ? " (with your input)" : ""}:\n\`\`\`\n${run.stdout.replace(/\s+$/, "") || "(nothing printed)"}\n\`\`\``).look = "output";
+    if (run.stderr.trim()) shown.errorIdx = this.reportCrash(rel, run.stderr.trim());
   }
 
-  private reportCrash(file: string, err: string) {
+  private reportCrash(file: string, err: string): number {
     const idx = this.errors.push({ path: file, err }) - 1;
     // Show the line that names the error (e.g. "ReferenceError: foo is not defined"), not the runtime's footer.
     const lines = err.trim().split("\n").map((l) => l.trim()).filter(Boolean);
@@ -1816,6 +1834,7 @@ export class VibeSession {
       `💥 \`${file}\` crashed:\n\`\`\`\n${last.slice(0, 300)}\n\`\`\`\nErrors are clues, not failures. Want me to explain what this one means?`,
       [{ label: "Explain this error", cmd: "explainError", arg: String(idx), primary: true }]);
     m.look = "crash";
+    return idx;
   }
 
   private async explainError(idx: number) {
@@ -1987,8 +2006,18 @@ export class VibeSession {
   }
 
   private say(role: VibeMsg["role"], text: string, buttons?: MsgButton[]): VibeMsg {
-    const m: VibeMsg = { id: ++this.msgSeq, role, text, buttons: buttons?.length ? buttons : undefined };
+    const m: VibeMsg = this.tag({ id: ++this.msgSeq, role, text, buttons: buttons?.length ? buttons : undefined });
     this.view.messages.push(m);
+    return m;
+  }
+
+  /** Notes where a new message belongs (study question, request, Structured step), so the page can fold the conversation. */
+  private tag(m: VibeMsg): VibeMsg {
+    const s = this.study;
+    if (s && s.prog.step === "work" && s.prog.part < s.parts.length) m.task = s.prog.task;
+    m.round = this.round;
+    const sp = this.structuredProgress();
+    if (sp && !sp.done) m.step = sp.step;
     return m;
   }
 
@@ -2042,6 +2071,7 @@ export class VibeSession {
     } : undefined;
 
     v.structured = this.structuredProgress();
+    v.awaiting = this.awaiting?.kind;
 
     const t = this.tour;
     v.tour = t ? {
@@ -2084,13 +2114,14 @@ export class VibeSession {
     if (this.gate) return { labels, step: this.gate.step };
     const latest = this.currentStructured ? this.proposals.get(this.currentStructured) : undefined;
     if (!latest || latest.card.status === "rejected" || latest.card.status === "failed") return undefined;
+    const changeId = latest.id;
     const next = STAGES.find((s) => latest.learn[s] === "active" || latest.learn[s] === "todo");
     const sub = latest.card.status === "pending" && latest.learn.tour !== "active" ? "accept the code"
       : next === "predict" ? "predict & run" : next === "check" ? "question" : next === "challenge" ? "modify" : next === "tour" ? "walkthrough" : "";
-    if (!next && latest.card.status === "accepted") return undefined;
-    if (this.requireSteps) return { labels, step: 3, sub };
+    if (!next && latest.card.status === "accepted") return { labels, step: labels.length, changeId, done: true };
+    if (this.requireSteps) return { labels, step: 3, sub, changeId };
     const inWalkthrough = latest.card.status === "pending" || next === "tour";
-    return { labels, step: inWalkthrough ? 2 : 3, sub: inWalkthrough ? (latest.card.status === "pending" && latest.learn.tour !== "active" ? "accept the code" : "") : sub };
+    return { labels, step: inWalkthrough ? 2 : 3, sub: inWalkthrough ? (latest.card.status === "pending" && latest.learn.tour !== "active" ? "accept the code" : "") : sub, changeId };
   }
 
   /** The flow in one line, as configured. */
